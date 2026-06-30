@@ -12,3 +12,9 @@ It's coming together! I've finished 3/4ths of the frame, just need to CAD the fi
 Side note: CAD'ing this while maintaining good CAD practice has been quite difficult. On the bright side if I need to change anything it's all parametric and well named so it's easy to edit!
 
 ![](/photos/comingTogether.png)
+
+# Update 3 - 6/30/2026 - Morning
+
+Think I've hit about 9 hours now. I finally finished the corner that has the motors mounted to it. Need to add the motors and bolts in but getting closer. Definitely my most complicated part yet with about sixteen operations to make it. Next up is to find a feature script for belts to show how they're routed
+
+![](/photos/all4Corners.png)
