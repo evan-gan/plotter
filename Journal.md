@@ -18,3 +18,9 @@ Side note: CAD'ing this while maintaining good CAD practice has been quite diffi
 Think I've hit about 9 hours now. I finally finished the corner that has the motors mounted to it. Need to add the motors and bolts in but getting closer. Definitely my most complicated part yet with about sixteen operations to make it. Next up is to find a feature script for belts to show how they're routed
 
 ![](/photos/all4Corners.png)
+
+# 6/30/2026 - 2:10pm - It's belted!
+
+After finding a feature script, I now have belts! Glad I CAD'd the belts because I found a few places it'd have to phase through so I carved out slots in the CAD! I also added the motors & pulleys on the motor shafts. Onto the gantry now!
+
+![](/photos/ItsBelted!.png)
