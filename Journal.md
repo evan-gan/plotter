@@ -24,3 +24,9 @@ Think I've hit about 9 hours now. I finally finished the corner that has the mot
 After finding a feature script, I now have belts! Glad I CAD'd the belts because I found a few places it'd have to phase through so I carved out slots in the CAD! I also added the motors & pulleys on the motor shafts. Onto the gantry now!
 
 ![](/photos/ItsBelted!.png)
+
+# 6/30/2026 - 2:30 - Belt bite
+
+I noticed that the belts were getting too close to the carriage so I made belt bites!
+
+![](/photos/BeltBite.png)
