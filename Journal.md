@@ -25,8 +25,14 @@ After finding a feature script, I now have belts! Glad I CAD'd the belts because
 
 ![](/photos/ItsBelted!.png)
 
-# 6/30/2026 - 2:30 - Belt bite
+# 6/30/2026 - 2:30pm - Belt bite
 
 I noticed that the belts were getting too close to the carriage so I made belt bites!
 
 ![](/photos/BeltBite.png)
+
+# 7/1/2026 - 10:00pm - Stuff has arrived!
+
+I've received all of the components I don't have (I'm canalizing a pen plotter named [Blot](https://github.com/hackclub/blot) that I got for free via a Hack Club program). I measured all the parts with some calipers and they all match what they said online! (this is good news because you never know when ordering stuff). Now to just finish up the gantry w/ tool head...
+
+![](/photos/questionableToolhead.png)
