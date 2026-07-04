@@ -36,3 +36,13 @@ I noticed that the belts were getting too close to the carriage so I made belt b
 I've received all of the components I don't have (I'm canalizing a pen plotter named [Blot](https://github.com/hackclub/blot) that I got for free via a Hack Club program). I measured all the parts with some calipers and they all match what they said online! (this is good news because you never know when ordering stuff). Now to just finish up the gantry w/ tool head...
 
 ![](/photos/questionableToolhead.png)
+
+# 7/3/2026 - 11:00am Test prints & tolerances
+
+I ran a test print today and found the tolerances I set (0 mm) to be way to little as I suspected so I tried out some more. Still need to try some but I found .25 lets the linear rods slide in the 3d printed plastic.
+
+# 7/3/2026 - very late - Toolhead carriage progress
+
+Made some progress on the toolhead- as you can see it doesn't look nice because I haven't applied all of my fillets and chamfers yet- last step!. It is amazing how well placed fillets/chamfers make a part feel much more polished and premium.
+
+![](/photos/wipCarrage.png)
