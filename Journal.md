@@ -46,3 +46,8 @@ I ran a test print today and found the tolerances I set (0 mm) to be way to litt
 Made some progress on the toolhead- as you can see it doesn't look nice because I haven't applied all of my fillets and chamfers yet- last step!. It is amazing how well placed fillets/chamfers make a part feel much more polished and premium.
 
 ![](/photos/wipCarrage.png)
+
+# 7/6/2026 - toolhead is done!
+
+The toolhead is finally done. After very constrained cadding I've managed to make the toolhead take up as little space as possible so we can use the max drawing space!
+![](/photos/toolhead%20done.png)
