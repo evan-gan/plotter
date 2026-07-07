@@ -12,3 +12,9 @@ _Progress as of the morning of 6/30/2026_
 ## Motivation:
 
 I participated in a hack club program called [Blot](blot.hackclub.com). After using the pen plotter, I found it had some issues with not printing level and also speed. So I wanted to make a faster, larger pen plotter. For the electronics of this project, I'm mostly cannibalizing my blot hardware, but I will add a Raspbery PI for control over Wi-Fi.
+
+## Firmware
+
+See [`firmware/FIRMWARE_INSTRUCTIONS.md`](firmware/FIRMWARE_INSTRUCTIONS.md) for flashing, layout selection, and tuning.
+
+<sub>Firmware is [samdev-7/upgraded-blot](https://github.com/samdev-7/upgraded-blot), slightly modified for a selectable CoreXY belt layout.</sub>
