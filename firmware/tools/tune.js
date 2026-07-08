@@ -20,6 +20,8 @@ const path = require("path");
 const { exec } = require("child_process");
 const { BAUD, resolvePort, open, parseArgs } = require("./lib/serial");
 const { runSession } = require("./lib/tune-engine");
+const { runCalibration } = require("./lib/calibrate");
+const { saveCalibration, loadCalibration } = require("./lib/calibration-store");
 
 const DEFAULT_HTTP_PORT = 7373;
 const UI_FILE = path.join(__dirname, "tune-ui.html");
@@ -239,6 +241,51 @@ async function main() {
     runProgram("Drawing backlash cross…", backlashGcode(),
       "Backlash cross done — a doubled line means lost motion on that belt.");
 
+  // ───────── ETA calibration ─────────
+  // Runs the calibration harness (lib/calibrate.js), streaming per-action
+  // estimate-vs-actual rows to the browser, and stashes the fitted knobs so the
+  // operator can persist them with one click. Motion tests run pen-up (no ink).
+  let lastCalibration = null;
+  const runEtaCalibration = () => {
+    if (running) return;
+    running = true;
+    lastCalibration = null;
+    broadcast({ type: "running", running: true });
+    broadcast({ type: "calStart" });
+    broadcast({ type: "log", text: "\nETA calibration — pen stays up; clear ~80 mm of +X/+Y travel." });
+    const calIo = {
+      log: (text) => broadcast({ type: "log", text }),
+      result: (row) => broadcast({ type: "calRow", row }),
+      summary: (rows, calibration) => {
+        lastCalibration = calibration;
+        broadcast({ type: "calSummary", rows, calibration });
+      },
+    };
+    runCalibration(connection, { io: calIo })
+      .catch((err) => broadcast({ type: "log", text: `\n! Calibration error: ${err.message}` }))
+      .finally(() => {
+        running = false;
+        broadcast({ type: "running", running: false });
+      });
+  };
+
+  // Persist the knobs from the most recent calibration run to
+  // eta-calibration.json so `pnpm eta` picks them up automatically.
+  const saveEtaCalibration = () => {
+    if (!lastCalibration) {
+      broadcast({ type: "log", text: "\n! No calibration to save — run it first." });
+      return;
+    }
+    try {
+      const stamped = { ...lastCalibration, savedAt: new Date().toISOString(), note: "browser tuner" };
+      const written = saveCalibration(stamped);
+      broadcast({ type: "log", text: `\nSaved calibration to ${written}.` });
+      broadcast({ type: "calSaved", calibration: stamped });
+    } catch (err) {
+      broadcast({ type: "log", text: `\n! Save error: ${err.message}` });
+    }
+  };
+
   // Release the steppers so the operator can push the toolhead by hand to a new
   // origin. Quick single command — no waitIdle, but still guarded so it can't
   // fire mid-program.
@@ -280,7 +327,7 @@ async function main() {
       res.write("\n");
       clients.add(res);
       res.write(
-        `data: ${JSON.stringify({ type: "status", port: serialPath, running })}\n\n`
+        `data: ${JSON.stringify({ type: "status", port: serialPath, running, savedCalibration: loadCalibration() })}\n\n`
       );
       req.on("close", () => clients.delete(res));
       return;
@@ -337,6 +384,22 @@ async function main() {
     if (method === "POST" && url === "/backlash") {
       readJson(req, () => {
         runBacklash();
+        respondOk(res);
+      });
+      return;
+    }
+
+    if (method === "POST" && url === "/calibrate") {
+      readJson(req, () => {
+        runEtaCalibration();
+        respondOk(res);
+      });
+      return;
+    }
+
+    if (method === "POST" && url === "/save-calibration") {
+      readJson(req, () => {
+        saveEtaCalibration();
         respondOk(res);
       });
       return;

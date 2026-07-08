@@ -7,12 +7,17 @@
   "bin": {
     "plotter-term": "term.js",
     "plotter-stream": "stream.js",
-    "plotter-tune": "tune.js"
+    "plotter-tune": "tune.js",
+    "plotter-eta": "eta.js",
+    "plotter-calibrate": "calibrate.js"
   },
   "scripts": {
     "term": "node term.js",
     "stream": "node stream.js",
-    "tune": "node tune.js"
+    "tune": "node tune.js",
+    "eta": "node eta.js",
+    "calibrate": "node calibrate.js",
+    "test": "node test/run_all.js"
   },
   "dependencies": {
     "serialport": "^13.0.0"

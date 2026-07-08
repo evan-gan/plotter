@@ -110,6 +110,18 @@
       </div>
     </div>
 
+    <h2>ETA calibration</h2>
+    <div class="panel">
+      <div class="row">
+        <button id="calibrate" class="primary">Run ETA calibration</button>
+        <button id="save-cal" disabled>Save scalers</button>
+        <span class="hint">Runs a few action types (line, diagonal, dense zigzag, circle, pen lifts) at the board's stored feed, compares the estimate to the real time, and fits correction scalers. Pen stays up — no ink needed. Clear ~80&nbsp;mm of +X/+Y travel.</span>
+      </div>
+      <div id="cal-current" class="mpos" style="margin-top:10px"></div>
+      <table id="cal-table" style="display:none; margin-top:12px"></table>
+      <div id="cal-knobs" class="big" style="display:none; margin-top:12px"></div>
+    </div>
+
     <h2>Positioning</h2>
     <div class="panel">
       <div class="row">
@@ -184,6 +196,32 @@
         "</tbody>";
     }
 
+    // ── ETA calibration rendering ──
+    function showSavedCalibration(cal) {
+      $("cal-current").textContent = cal
+        ? `saved scalers: motion ×${cal.motionScaler}, overhead ${cal.overheadPerMoveMs} ms/move, pen ${cal.penMoveMs} ms`
+        : "no saved calibration yet — the physics estimate is used as-is.";
+    }
+    function startCalTable() {
+      $("save-cal").disabled = true;
+      $("cal-knobs").style.display = "none";
+      const table = $("cal-table");
+      table.style.display = "";
+      table.innerHTML = "<thead><tr><th>action</th><th>est</th><th>actual</th><th>ratio</th></tr></thead><tbody></tbody>";
+    }
+    function addCalRow(row) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${row.label}</td><td>${row.estSeconds.toFixed(1)}s</td>` +
+        `<td>${row.actualSeconds.toFixed(1)}s</td><td>${row.ratio.toFixed(2)}×</td>`;
+      $("cal-table").querySelector("tbody").appendChild(tr);
+    }
+    function showCalKnobs(cal) {
+      const knobs = $("cal-knobs");
+      knobs.style.display = "";
+      knobs.textContent = `motion ×${cal.motionScaler} · overhead ${cal.overheadPerMoveMs} ms/move · pen ${cal.penMoveMs} ms`;
+      $("save-cal").disabled = false;
+    }
+
     const promptEl = $("prompt");
     function showPrompt(ev) {
       $("prompt-test").textContent = ev.test;
@@ -201,6 +239,7 @@
       $("slow-circle").disabled = running;
       $("max-circle").disabled = running;
       $("backlash").disabled = running;
+      $("calibrate").disabled = running;
       $("release").disabled = running;
       $("zero").disabled = running;
       $("reset").disabled = running;
@@ -222,6 +261,8 @@
     $("slow-circle").onclick = () => post("/slow-circle", {});
     $("max-circle").onclick = () => post("/max-circle", {});
     $("backlash").onclick = () => post("/backlash", {});
+    $("calibrate").onclick = () => post("/calibrate", {});
+    $("save-cal").onclick = () => post("/save-calibration", {});
     $("release").onclick = () => post("/release", {});
     $("zero").onclick = () => post("/zero", {});
     $("reset").onclick = () => {
@@ -249,6 +290,7 @@
           $("dot").classList.add("on");
           $("conn").textContent = `connected · ${ev.port}`;
           setRunning(ev.running);
+          showSavedCalibration(ev.savedCalibration);
           break;
         case "running": setRunning(ev.running); break;
         case "log": log(ev.text); break;
@@ -256,6 +298,10 @@
         case "clearPrompt": clearPrompt(); break;
         case "settings": renderSettings(ev.values); break;
         case "summary": renderSummary(ev.rows); break;
+        case "calStart": startCalTable(); break;
+        case "calRow": addCalRow(ev.row); break;
+        case "calSummary": showCalKnobs(ev.calibration); break;
+        case "calSaved": showSavedCalibration(ev.calibration); break;
       }
     };
     events.onerror = () => { $("dot").classList.remove("on"); $("conn").textContent = "server disconnected"; };
