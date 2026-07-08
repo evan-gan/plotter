@@ -34,10 +34,15 @@
 #define COREXY_LAYOUT    1   // ← set this (1–4) to match your machine
 
 #if   COREXY_LAYOUT == 1
-    // Stock-Blot routing:    motor1 =  x - y,   motor2 = -x - y
-    #define COREXY_M1_X   (+1.0f)
+    // Stock-Blot routing, X mirrored for this machine:
+    //     motor1 = -x - y,   motor2 =  x - y
+    // Stock Blot is motor1 = x - y, motor2 = -x - y; the X-column signs are
+    // negated here because +X drove the carriage the wrong way on this build.
+    // (A pure single-axis mirror is NOT one of presets 2–4 — reversing X on
+    // CoreXY means negating x's contribution to BOTH motors, done below.)
+    #define COREXY_M1_X   (-1.0f)
     #define COREXY_M1_Y   (-1.0f)
-    #define COREXY_M2_X   (-1.0f)
+    #define COREXY_M2_X   (+1.0f)
     #define COREXY_M2_Y   (-1.0f)
 #elif COREXY_LAYOUT == 2
     // Standard CoreXY:       motor1 =  x + y,   motor2 =  x - y

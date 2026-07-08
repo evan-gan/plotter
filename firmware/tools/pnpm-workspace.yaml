@@ -1,0 +1,5 @@
+# serialport's native bindings ship prebuilt binaries, but pnpm still wants
+# explicit approval to run its install script. Approving it keeps `pnpm install`
+# quiet and lets it compile from source if no prebuilt binary is available.
+allowBuilds:
+  '@serialport/bindings-cpp': true

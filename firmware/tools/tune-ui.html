@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Plotter Tuner</title>
+  <style>
+    :root {
+      --bg: #14161a; --panel: #1d2026; --edge: #2c313a;
+      --ink: #e6e9ee; --muted: #8b93a1; --accent: #5ac8fa;
+      --pass: #34c759; --fail: #ff3b30; --warn: #ff9f0a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--ink);
+      font: 15px/1.5 system-ui, -apple-system, sans-serif;
+    }
+    .wrap { max-width: 860px; margin: 0 auto; padding: 24px 20px 60px; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 24px 0 10px; }
+    .sub { color: var(--muted); margin: 0 0 20px; }
+    .panel { background: var(--panel); border: 1px solid var(--edge); border-radius: 10px; padding: 16px; }
+    .row { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; }
+    ol { margin: 8px 0; padding-left: 20px; }
+    li { margin: 4px 0; }
+    label { display: inline-flex; align-items: center; gap: 6px; }
+    button {
+      font: inherit; border: 1px solid var(--edge); background: #262b33; color: var(--ink);
+      padding: 9px 16px; border-radius: 8px; cursor: pointer;
+    }
+    button:hover:not(:disabled) { border-color: var(--accent); }
+    button:disabled { opacity: .4; cursor: not-allowed; }
+    button.primary { background: var(--accent); color: #05233a; border-color: var(--accent); font-weight: 600; }
+    button.pass { border-color: var(--pass); } button.pass:hover { background: #14351f; }
+    button.fail { border-color: var(--fail); } button.fail:hover { background: #3a1512; }
+    .status-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--fail); display: inline-block; }
+    .status-dot.on { background: var(--pass); }
+    #prompt { display: none; border-color: var(--accent); }
+    #prompt.show { display: block; }
+    .kv { font-variant-numeric: tabular-nums; }
+    .big { font-size: 30px; font-weight: 700; }
+    .mpos { color: var(--muted); font-variant-numeric: tabular-nums; }
+    table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+    th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--edge); }
+    th { color: var(--muted); font-weight: 600; font-size: 13px; }
+    .tuned { color: var(--pass); }
+    #log {
+      background: #0d0f12; border: 1px solid var(--edge); border-radius: 8px; padding: 12px;
+      font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: #c8ccd4;
+      height: 300px; overflow-y: auto; white-space: pre-wrap; word-break: break-word;
+    }
+    kbd { background: #262b33; border: 1px solid var(--edge); border-radius: 4px; padding: 1px 6px; font-size: 12px; }
+    .hint { color: var(--muted); font-size: 13px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Plotter Tuner</h1>
+    <p class="sub">
+      <span id="dot" class="status-dot"></span>
+      <span id="conn">connecting…</span>
+    </p>
+
+    <div class="panel">
+      <strong>Before you start</strong>
+      <ol>
+        <li>Put a pen in the holder with the tip touching taped-down paper.</li>
+        <li>Hand-move the carriage so there is ≥120&nbsp;mm of free travel in <b>+X</b> and <b>+Y</b>.</li>
+        <li>Close anything else using the serial port (a G-code sender, the terminal).</li>
+      </ol>
+    </div>
+
+    <h2>Run</h2>
+    <div class="panel">
+      <div class="row">
+        <label><input type="radio" name="mode" value="coarse" checked /> Coarse (×1.5, 80% backoff)</label>
+        <label><input type="radio" name="mode" value="fine" /> Fine (×1.1, 90%, near current)</label>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <span class="kv">Tests:</span>
+        <label><input type="checkbox" class="test" value="C" checked /> C · axis accel ($120)</label>
+        <label><input type="checkbox" class="test" value="D" checked /> D · diag accel ($122)</label>
+        <label><input type="checkbox" class="test" value="A" checked /> A · axis speed ($110)</label>
+        <label><input type="checkbox" class="test" value="B" checked /> B · diag speed ($112)</label>
+      </div>
+      <div class="row" style="margin-top:16px">
+        <button id="start" class="primary">Start tuning</button>
+        <button id="stop" disabled>Stop</button>
+        <span class="hint">Tests always run accel-first (C → D → A → B).</span>
+      </div>
+    </div>
+
+    <h2>Test shapes &amp; diagnostics</h2>
+    <div class="panel">
+      <div class="row">
+        <button id="circle">Draw 20&nbsp;mm circle</button>
+        <span class="hint">Traces one 20&nbsp;mm-diameter circle from the current position, then returns to origin.</span>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button id="slow-circle">Draw circle slowly</button>
+        <span class="hint">Same circle at 300&nbsp;mm/min. Backlash flat-spots show at the four 45° points; if they vanish slow, it's inertia, if they stay, it's belt slack.</span>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button id="max-circle">Draw circle at max feed</button>
+        <span class="hint">Same circle at the board's configured max feedrate ($110) — reflects the real top speed your tuned settings allow.</span>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button id="backlash">Draw backlash cross</button>
+        <span class="hint">Four out-and-back strokes from one centre. A doubled (non-overlapping) line = lost motion; the two diagonal strokes isolate which belt.</span>
+      </div>
+    </div>
+
+    <h2>Positioning</h2>
+    <div class="panel">
+      <div class="row">
+        <button id="release">Release motors</button>
+        <button id="zero" class="primary">Enable &amp; zero here</button>
+        <span class="hint">Release, hand-move the toolhead to your desired origin, then Enable &amp; zero here to make that point X0&nbsp;Y0.</span>
+      </div>
+    </div>
+
+    <div id="prompt" class="panel" style="margin-top:16px">
+      <div class="kv" id="prompt-test" style="color:var(--muted)"></div>
+      <div class="big"><span id="prompt-setting"></span> = <span id="prompt-value"></span></div>
+      <div class="mpos">Pen ended at MPos <span id="prompt-mpos"></span></div>
+      <p style="margin:12px 0 8px">Did the pen return cleanly to the origin dot, with no grinding/stalling noise?</p>
+      <div class="row">
+        <button class="pass" data-v="y">Pass <kbd>y</kbd></button>
+        <button class="fail" data-v="n">Fail <kbd>n</kbd></button>
+        <button data-v="r">Retry <kbd>r</kbd></button>
+        <button data-v="q">Skip test <kbd>q</kbd></button>
+      </div>
+    </div>
+
+    <h2>Settings on the board</h2>
+    <div class="panel">
+      <table id="settings"><tbody><tr><td class="mpos">waiting…</td></tr></tbody></table>
+      <div class="row" style="margin-top:12px">
+        <button id="reset" class="fail">Reset to defaults</button>
+        <span class="hint">Restores every setting to the firmware's compile-time defaults ($RST=*). Discards tuned values.</span>
+      </div>
+    </div>
+
+    <div id="summary-wrap" style="display:none">
+      <h2>Result</h2>
+      <div class="panel"><table id="summary"></table></div>
+    </div>
+
+    <h2>Log</h2>
+    <div id="log"></div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const post = (path, body) =>
+      fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+
+    const logEl = $("log");
+    function log(text) {
+      logEl.textContent += (text.startsWith("\n") ? text : text + "\n");
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    const SETTING_LABELS = {
+      "$110": "max axis feedrate (mm/min)", "$111": "max rapid (mm/min)",
+      "$112": "max motor rate (mm/min)", "$120": "max axis accel (mm/s²)",
+      "$122": "max motor accel (mm/s²)",
+    };
+    function renderSettings(values) {
+      const keys = Object.keys(SETTING_LABELS).filter((k) => values[k] !== undefined);
+      $("settings").innerHTML =
+        "<thead><tr><th>Setting</th><th>Value</th><th>Meaning</th></tr></thead><tbody>" +
+        keys.map((k) => `<tr><td>${k}</td><td>${Math.round(values[k])}</td><td class="mpos">${SETTING_LABELS[k]}</td></tr>`).join("") +
+        "</tbody>";
+    }
+
+    function renderSummary(rows) {
+      $("summary-wrap").style.display = "block";
+      $("summary").innerHTML =
+        "<thead><tr><th>Setting</th><th>Final</th><th>Was</th><th></th></tr></thead><tbody>" +
+        rows.map((r) => `<tr><td>${r.setting}</td><td>${r.value}</td>` +
+          `<td class="mpos">${r.was ?? "?"}</td>` +
+          `<td class="${r.tuned ? "tuned" : "mpos"}">${r.tuned ? "tuned" : "unchanged"}</td></tr>`).join("") +
+        "</tbody>";
+    }
+
+    const promptEl = $("prompt");
+    function showPrompt(ev) {
+      $("prompt-test").textContent = ev.test;
+      $("prompt-setting").textContent = ev.setting;
+      $("prompt-value").textContent = ev.value;
+      $("prompt-mpos").textContent = `${ev.mpos.x.toFixed(3)}, ${ev.mpos.y.toFixed(3)}`;
+      promptEl.classList.add("show");
+    }
+    const clearPrompt = () => promptEl.classList.remove("show");
+
+    function setRunning(running) {
+      $("start").disabled = running;
+      $("stop").disabled = !running;
+      $("circle").disabled = running;
+      $("slow-circle").disabled = running;
+      $("max-circle").disabled = running;
+      $("backlash").disabled = running;
+      $("release").disabled = running;
+      $("zero").disabled = running;
+      $("reset").disabled = running;
+      document.querySelectorAll(".test, input[name=mode]").forEach((el) => (el.disabled = running));
+    }
+
+    // ── controls ──
+    $("start").onclick = () => {
+      const mode = document.querySelector("input[name=mode]:checked").value;
+      const tests = [...document.querySelectorAll(".test:checked")].map((el) => el.value).join("");
+      if (!tests) { alert("Pick at least one test."); return; }
+      logEl.textContent = "";
+      $("summary-wrap").style.display = "none";
+      // Engine runs tests accel-first regardless of checkbox order.
+      post("/start", { mode, tests });
+    };
+    $("stop").onclick = () => post("/stop", {});
+    $("circle").onclick = () => post("/circle", {});
+    $("slow-circle").onclick = () => post("/slow-circle", {});
+    $("max-circle").onclick = () => post("/max-circle", {});
+    $("backlash").onclick = () => post("/backlash", {});
+    $("release").onclick = () => post("/release", {});
+    $("zero").onclick = () => post("/zero", {});
+    $("reset").onclick = () => {
+      if (confirm("Reset all settings to firmware defaults? This discards any tuned values.")) {
+        post("/reset", {});
+      }
+    };
+    document.querySelectorAll("#prompt button").forEach((btn) => {
+      btn.onclick = () => { clearPrompt(); post("/verdict", { v: btn.dataset.v }); };
+    });
+    document.addEventListener("keydown", (e) => {
+      if (!promptEl.classList.contains("show")) return;
+      if (["y", "n", "r", "q"].includes(e.key)) {
+        clearPrompt();
+        post("/verdict", { v: e.key });
+      }
+    });
+
+    // ── live events ──
+    const events = new EventSource("/events");
+    events.onmessage = (msg) => {
+      const ev = JSON.parse(msg.data);
+      switch (ev.type) {
+        case "status":
+          $("dot").classList.add("on");
+          $("conn").textContent = `connected · ${ev.port}`;
+          setRunning(ev.running);
+          break;
+        case "running": setRunning(ev.running); break;
+        case "log": log(ev.text); break;
+        case "prompt": showPrompt(ev); break;
+        case "clearPrompt": clearPrompt(); break;
+        case "settings": renderSettings(ev.values); break;
+        case "summary": renderSummary(ev.rows); break;
+      }
+    };
+    events.onerror = () => { $("dot").classList.remove("on"); $("conn").textContent = "server disconnected"; };
+  </script>
+</body>
+</html>

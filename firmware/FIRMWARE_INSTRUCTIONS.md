@@ -22,30 +22,69 @@ Reference docs: [`FIRMWARE.md`](FIRMWARE.md) (architecture),
 [`SUPPORTED_COMMANDS.md`](SUPPORTED_COMMANDS.md) (G-code reference),
 [`TUNING.md`](TUNING.md) (the theory behind tuning).
 
+### Helper tools (`tools/`)
+
+The [`tools/`](tools/) folder has three Node scripts for talking to the board
+over USB, run with **pnpm**:
+
+| Command | What it does |
+| ------- | ------------ |
+| `pnpm term`   | Interactive serial monitor / G-code REPL. |
+| `pnpm stream` | Stream a `.gcode` file to the board with flow control. |
+| `pnpm tune`   | Speed/accel tuner — serves a local web page you tune from. |
+
+Install their one dependency once:
+
+```bash
+cd firmware/tools
+pnpm install
+```
+
+Then run any of them with `pnpm <name>` from `firmware/tools/`. The examples in
+this doc use `pnpm --dir firmware/tools <name>` so they also work from the repo
+root. All three auto-detect the plotter's serial port; add
+`--port /dev/cu.usbmodemXXXX` to override.
+
 ---
 
 ## 1. Flash the firmware to the hardware
 
-1. Install the [Arduino IDE](https://www.arduino.cc/en/software).
-2. Open **Arduino → Settings** and, under _Additional boards manager URLs_,
-   paste:
-   `https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json`
-3. Open **Tools → Board → Boards Manager**, search `pico`, and install
-   **Raspberry Pi Pico/RP2040** by Earle F. Philhower.
-4. Select the board: **Tools → Board → Raspberry Pi Pico/RP2040 → Seeed XIAO
-   RP2040**.
-5. Open the sketch: **File → Open → `firmware/firmware.ino`**. The IDE picks up
-   the other `.cpp`/`.h` files in this folder automatically.
-6. Plug the plotter into USB. Under **Tools → Port**, pick the
-   `/dev/cu.usbmodem…` (macOS) / `COMx` (Windows) entry that appears.
-7. Click the **upload arrow** (top-left). Wait for **"Done uploading."**
-8. Sanity-check the board is alive: open a serial terminal at **115200 baud**
-   (or run [`tools/term.py`](tools/term.py)) and send `?`. You should get back
-   something like `<Idle|MPos:0.000,0.000|FS:0,0>`. Send `$I` — it should
-   report a Grbl version string.
+The XIAO RP2040 flashes by **drag-and-drop**: when the board is in bootloader
+mode it mounts as a USB drive named **`RPI-RP2`**, and copying a `.uf2` file
+onto that drive flashes it and reboots automatically. No IDE upload step is
+needed — you just need the `.uf2` file.
 
-> If nothing shows up on the port, double-tap the XIAO's reset to enter
-> bootloader mode, then re-select the port and upload again.
+**Get the `.uf2` file.** The repo ships C++ source, not a prebuilt binary, so
+you have to compile the sketch to a `.uf2` once. Either grab the `.uf2` from a
+release/build if one has been provided to you, or build it yourself with
+[`arduino-cli`](https://arduino.github.io/arduino-cli/) (from the repo root):
+
+```bash
+arduino-cli core install rp2040:rp2040 \
+  --additional-urls https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
+arduino-cli compile --fqbn rp2040:rp2040:seeed_xiao_rp2040 \
+  --output-dir build firmware
+```
+
+That writes `build/firmware.ino.uf2` — the file you'll drag onto the board.
+(You have to re-run this compile step whenever you change
+[`config.h`](config.h), e.g. to try a different CoreXY layout in Section 2.)
+
+**Flash it:**
+
+1. Plug the plotter into USB.
+2. Put the XIAO into bootloader mode: **double-tap its reset button**. A USB
+   drive named **`RPI-RP2`** should appear on your computer.
+3. **Drag `build/firmware.ino.uf2` onto the `RPI-RP2` drive** (or copy it there
+   with `cp build/firmware.ino.uf2 /Volumes/RPI-RP2/` on macOS). The drive
+   ejects itself and the board reboots into the new firmware.
+4. Sanity-check the board is alive: open a serial terminal at **115200 baud**
+   (or run the serial monitor, `pnpm --dir firmware/tools term`) and send `?`.
+   You should get back something like `<Idle|MPos:0.000,0.000|FS:0,0>`. Send
+   `$I` — it should report a Grbl version string.
+
+> If the `RPI-RP2` drive never appears, unplug/replug and double-tap the reset
+> again — the timing on the double-tap is a little fussy.
 
 ---
 
@@ -63,7 +102,7 @@ carriage heads for an end-stop.
 
 1. In [`config.h`](config.h), leave `COREXY_LAYOUT` at its default of `1` for
    the first attempt. Flash the firmware (Section 1).
-2. Connect a terminal at 115200 baud ([`tools/term.py`](tools/term.py) or any
+2. Connect a terminal at 115200 baud (`pnpm --dir firmware/tools term` or any
    G-code sender).
 3. Enable the motors and set a temporary origin:
    ```
@@ -108,9 +147,9 @@ carriage heads for an end-stop.
 
 The firmware ships with conservative speed/accel caps so a freshly assembled
 machine won't skip steps. Tuning pushes those caps up to what your specific
-belts and motors can handle, then backs off to a safety margin. The guided
-script [`tools/tune.py`](tools/tune.py) automates the whole procedure; the
-theory behind it is in [`TUNING.md`](TUNING.md).
+belts and motors can handle, then backs off to a safety margin. The `tune` tool
+serves a small local web page that automates the whole procedure; the theory
+behind it is in [`TUNING.md`](TUNING.md).
 
 **What it tunes** (four numbers, because CoreXY loads the motors differently on
 axes vs. diagonals):
@@ -122,40 +161,42 @@ axes vs. diagonals):
 | `$120`  | Max tip acceleration (mm/s²)         | axis test     |
 | `$122`  | Max individual-motor accel (mm/s²)   | diagonal test |
 
-The script writes these to flash so they persist across power cycles. It does
+The tool writes these to flash so they persist across power cycles. It does
 **not** touch `$100` (steps/mm) or the servo pen settings — those are physical
-calibration, set with a ruler, not this script.
+calibration, set with a ruler, not this tool.
 
 **Run it:**
 
-1. Install `pyserial` once: `pip3 install pyserial`.
+1. Install the tools once if you haven't: `cd firmware/tools && pnpm install`.
 2. Put a pen in the holder with the tip touching taped-down paper. Leave
    ~120 mm of free travel in **+X** and **+Y** (the tests use 100 mm on axes
    and ~71 mm on diagonals).
 3. Close anything else that owns the USB port (a G-code sender, the terminal).
-4. Run the coarse tune from the repo root:
+4. Start the tuner:
    ```bash
-   python3 firmware/tools/tune.py
-   python3 firmware/tools/tune.py --port /dev/cu.usbmodemXXXX   # if auto-port is wrong
+   pnpm --dir firmware/tools tune
+   pnpm --dir firmware/tools tune --port /dev/cu.usbmodemXXXX   # if auto-port is wrong
    ```
-5. The script marks an origin dot, then walks through four tests in order
-   **C → D → A → B** (accel first, then speed). For each iteration it runs a
-   short pattern that should return the pen to the origin dot.
-6. After each pattern, answer the prompt:
-   - `y` — pen came back cleanly to the dot, no grinding noise → it steps up
-     and tries a faster/harder value.
-   - `n` — pen drifted off the dot, or you heard the motor grind/stall → it
-     backs off to a safe fraction of the last good value and saves it.
-   - `r` — retry the same value. `q` — stop this test.
-7. When all four tests finish, the script writes the tuned values (and derives
-   `$111` rapid rate) to flash and prints a summary.
-8. Optional: run a fine pass to land closer to the real limit:
-   ```bash
-   python3 firmware/tools/tune.py --fine
-   ```
-   `--fine` starts just below your stored values and steps in smaller
-   increments. You can also tune a single pair, e.g. `--tests CA` for axis
-   accel + axis speed only.
+   It opens a page at <http://127.0.0.1:7373> (your browser should launch
+   automatically; if not, open that URL). Everything below happens in the page.
+5. Leave the mode on **Coarse** and all four tests checked, then click **Start
+   tuning**. It marks an origin dot and walks through the tests in order
+   **C → D → A → B** (accel first, then speed), running a short pattern at each
+   value that should return the pen to the origin dot.
+6. After each pattern, judge the pen and click the button (or press its key):
+   - **Pass** (`y`) — pen came back cleanly to the dot, no grinding noise → it
+     steps up and tries a faster/harder value.
+   - **Fail** (`n`) — pen drifted off the dot, or you heard the motor
+     grind/stall → it backs off to a safe fraction of the last good value and
+     saves it.
+   - **Retry** (`r`) — run the same value again. **Skip test** (`q`) — move on
+     to the next test.
+7. When all four tests finish, the tool writes the tuned values (and derives
+   `$111` rapid rate) to flash and shows a result table.
+8. Optional: switch the mode to **Fine** and click Start again to land closer to
+   the real limit — it begins just below your stored values and steps in smaller
+   increments. You can also uncheck tests to tune just a subset (e.g. only **C**
+   and **A** for axis accel + axis speed).
 
 > **How to read the pen:** the firmware's `MPos:` counter tracks commanded
 > pulses, not real rotation, so it can't tell you when a motor skipped — you
@@ -168,7 +209,7 @@ calibration, set with a ruler, not this script.
 
 All the tunable values (speeds, accels, work area, servo pulse widths) live in
 flash on the board and are read/written over serial with standard GRBL `$`
-commands. Connect at 115200 baud with [`tools/term.py`](tools/term.py), any
+commands. Connect at 115200 baud with `pnpm --dir firmware/tools term`, any
 G-code sender, or UGS's **Firmware Settings** panel.
 
 **View everything currently on the plotter** — send `$$`. The real dump also
@@ -215,13 +256,14 @@ burst of edits won't stall motion).
   - The new firmware changes the settings struct — the firmware bumps an
     internal version stamp and treats an old, mismatched blob as invalid,
     falling back to defaults.
-  - You change the flash or filesystem size in the Arduino IDE, which moves
-    where the settings region lives.
+  - You change the flash or filesystem size in the build (e.g. a different
+    partition-size flag passed to `arduino-cli`), which moves where the settings
+    region lives.
 
 **Bulletproof workflow: back up before you re-flash.**
 
 1. Before flashing, connect and send `$$`. Copy the output somewhere safe (or
-   run `python3 firmware/tools/term.py` and save the log).
+   run `pnpm --dir firmware/tools term` and save the log).
 2. Re-flash the firmware.
 3. Send `$$` again to see what carried over.
 4. Re-apply anything that reset by sending the `$<id>=<value>` lines from your
@@ -229,6 +271,6 @@ burst of edits won't stall motion).
    whole saved block back in also works — the firmware just ignores the
    read-only lines like `$100`.
 
-> Re-running [`tools/tune.py`](tools/tune.py) also re-derives the speed/accel
-> caps from scratch, so if you only re-flash occasionally, a quick `--fine`
-> pass is another way to restore them.
+> Re-running the tuner (`pnpm --dir firmware/tools tune`) also re-derives the
+> speed/accel caps from scratch, so if you only re-flash occasionally, a quick
+> **Fine** pass is another way to restore them.

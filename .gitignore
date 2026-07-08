@@ -1,2 +1,4 @@
 .DS_store
 /upgraded-blot-main
+# Compiled firmware artifacts from `arduino-cli compile --output-dir build`
+/build

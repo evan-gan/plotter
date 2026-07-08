@@ -46,12 +46,25 @@ sketch. GRBL-subset protocol at 115200 baud; pen maps onto spindle commands
 - `FIRMWARE_INSTRUCTIONS.md` — **numbered steps to flash, select the CoreXY layout, and tune.** Start here for setup.
 - `FIRMWARE.md` — architecture / design rationale.
 - `SUPPORTED_COMMANDS.md` — exact G-code/command reference.
-- `TUNING.md` — the theory behind `tune.py`.
+- `TUNING.md` — the theory behind the tuner.
 
-### `firmware/tools/`
-- `term.py` — raw serial REPL.
-- `stream.py` — file-based G-code streamer with flow control.
-- `tune.py` — guided speed/accel calibration (tunes `$110`/`$112`/`$120`/`$122`).
+### `firmware/tools/` — Node/pnpm serial tools
+A self-contained pnpm project (pnpm is scoped to this folder). One dependency:
+`serialport`. Run `pnpm install` once, then `pnpm <script>` from here (or
+`pnpm --dir firmware/tools <script>` from the repo root). All auto-detect the
+plotter's USB serial port; `--port` overrides.
+
+| File | What it does |
+| ---- | ------------ |
+| `lib/serial.js` | Shared serial helper: port autodetect (`tty.`→`cu.` on macOS), line reader, `sendLine`→ok/error, `?` status, `$$` settings parse, arg parser. |
+| `lib/tune-engine.js` | Transport-agnostic tuning state machine (ported from the old `tune.py`): the four tests (C/D/A/B), CoreXY push/pull of cross-constraints, backoff math. Driven through an `io` object. |
+| `term.js` | `pnpm term` — interactive serial REPL / monitor (raw-mode input). |
+| `stream.js` | `pnpm stream <file.gcode>` — G-code file streamer with ok/error flow control. |
+| `tune.js` | `pnpm tune` — HTTP + SSE server that serves the tuning page and bridges it to the serial port. Runs the engine; browser is the control surface. Shape/diagnostic endpoints stream G-code via a shared `runProgram()` helper: `POST /circle` (20 mm test circle at an explicit 750 mm/min, on-device G2 arc), `POST /slow-circle` (same at 300 mm/min to expose backlash flat-spots), `POST /max-circle` (reads `$110` and draws at the board's configured max feedrate), `POST /backlash` (four out-and-back strokes from one centre — cardinal + diagonal — to reveal per-belt lost motion). Note: each circle sets its own `F` word because feedrate is modal on the board, so one button can't leave a stale feed that changes another's speed. Positioning: `POST /release` (`M18`, hand-move the head) + `POST /zero` (`M17`+`G92 X0 Y0`). `POST /reset` restores firmware defaults via `$RST=*`. |
+| `tune-ui.html` | The single-page tuning UI (vanilla JS, no build step) served by `tune.js`. "Test shapes & diagnostics" panel: **Draw 20 mm circle**, **Draw circle slowly**, **Draw circle at max feed**, **Draw backlash cross**. "Positioning" panel: **Release motors** + **Enable & zero here** (hand-home workflow). **Reset to defaults** (with confirm) lives in the settings section. |
+| `patterns/` | Sample `.gcode` files for `stream.js`. |
+
+These replaced the original Python (`term.py`/`stream.py`/`tune.py` + pyserial).
 
 ### `firmware/test/`
 Host-side C++ test harness (mocks `<Arduino.h>`). Run with `cd firmware/test && make test`.

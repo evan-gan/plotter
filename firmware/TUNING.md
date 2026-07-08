@@ -2,7 +2,7 @@
 
 After you flash the firmware, every Blot ships with conservative limits in `$110`/`$112`/`$120`/`$122`. They're safe enough that a freshly-assembled machine won't skip steps — but slow enough that a full-canvas stipple takes _forever_. Tuning pushes those caps up to whatever your specific belts, motors, and driver current can actually handle, then backs off to a safety margin. The payoff: the same drawing plots in a fraction of the time.
 
-The guided script [`tools/tune.py`](tools/tune.py) walks you through it. This doc explains **why** it does what it does and how to read its output. Run the script when following along.
+The `tune` tool ([`tools/tune.js`](tools/tune.js)) walks you through it in a small local web page. This doc explains **why** it does what it does and how to read its output. Run the tool when following along.
 
 ## Why there are four numbers to tune, not two
 
@@ -49,32 +49,32 @@ Steppers don't give a soft warning before they skip — one moment the motor is 
 
 The firmware's internal position counter (`MPos:`) tracks commanded pulses, not real motor rotation — so by itself it won't tell you when the motor skipped. That's why this test is physical: the pen drifts on paper, you see it.
 
-## Using `tools/tune.py`
+## Using the `tune` tool
 
-The script does all of the above automatically, including the CoreXY-aware push/pull of cross-constraints. You answer _y_/_n_ between iterations based on whether the pen came back home.
+The tool does all of the above automatically, including the CoreXY-aware push/pull of cross-constraints. You click _Pass_/_Fail_ (or press _y_/_n_) between iterations based on whether the pen came back home.
 
 ### Setup
 
 1. Put a pen in the holder; tape down a sheet of paper.
-2. **Hand-move** the carriage so there's ~120 mm of free travel in both `+X` and `+Y`. (The script uses 100 mm for axis tests and ~71 mm for the diagonals.)
+2. **Hand-move** the carriage so there's ~120 mm of free travel in both `+X` and `+Y`. (The tool uses 100 mm for axis tests and ~71 mm for the diagonals.)
 3. Close anything else that owns the USB port (UGS, the Blot UI, etc).
-4. Install `pyserial` if you don't have it:
+4. Install the tools once if you haven't:
    ```bash
-   pip3 install pyserial
+   cd firmware/tools && pnpm install
    ```
 
 ### Run it
 
 ```bash
-python3 firmware/tools/tune.py
-python3 firmware/tools/tune.py --port /dev/cu.usbmodemXXXX
-python3 firmware/tools/tune.py --tests CA      # just axis accel + axis speed
-python3 firmware/tools/tune.py --fine          # small steps from current values
+pnpm --dir firmware/tools tune
+pnpm --dir firmware/tools tune --port /dev/cu.usbmodemXXXX
 ```
+
+This opens a page at <http://127.0.0.1:7373>. In the page you choose the mode (**Coarse** or **Fine**) and which tests to run (untick tests to tune a subset — e.g. only **C** and **A** for axis accel + axis speed), then click **Start tuning**.
 
 ### What happens
 
-The script runs **tests in the order C → D → A → B**, which is _accel first, speed second_. That's deliberate: a speed test with low accel would hit a triangle velocity profile (`v_peak = √(a·L)`) long before it hit the commanded feedrate, and every "y, faster" answer after that would be a false positive — you'd be measuring the accel cap, not the speed cap.
+The tool runs **tests in the order C → D → A → B**, which is _accel first, speed second_. That's deliberate: a speed test with low accel would hit a triangle velocity profile (`v_peak = √(a·L)`) long before it hit the commanded feedrate, and every "Pass, faster" answer after that would be a false positive — you'd be measuring the accel cap, not the speed cap.
 
 | Test | Setting | What it measures                               |
 | ---- | ------- | ---------------------------------------------- |
@@ -85,33 +85,33 @@ The script runs **tests in the order C → D → A → B**, which is _accel firs
 
 For each test:
 
-1. The script pushes every _other_ cap to a huge number so only the value under test can be the bottleneck. Without this, a low `$112` would silently cap `$110` during Test A and your "still works" answers wouldn't mean anything.
+1. The tool pushes every _other_ cap to a huge number so only the value under test can be the bottleneck. Without this, a low `$112` would silently cap `$110` during Test A and your "still works" answers wouldn't mean anything.
 2. It sends the pattern, waits for Idle, reads `MPos:`.
-3. You answer `y` (pen came home, no stalls) / `n` (pen drifted or stalls heard) / `r` (retry same value) / `q` (stop this test).
-4. On `y` it multiplies the value by the growth factor (×1.5 coarse, ×1.1 fine) and repeats.
-5. On `n` it backs off to 80% (coarse) or 90% (fine) of the last passing value and writes that to flash via `$N=...`.
+3. You click **Pass** (`y`, pen came home, no stalls) / **Fail** (`n`, pen drifted or stalls heard) / **Retry** (`r`, same value) / **Skip test** (`q`).
+4. On **Pass** it multiplies the value by the growth factor (×1.5 coarse, ×1.1 fine) and repeats.
+5. On **Fail** it backs off to 80% (coarse) or 90% (fine) of the last passing value and writes that to flash via `$N=...`.
 
-When all four tests are done the script writes each tuned number back to the firmware and restores anything it pushed out of the way but didn't actually tune. Settings persist across power cycles — no extra save step.
+When all four tests are done the tool writes each tuned number back to the firmware and restores anything it pushed out of the way but didn't actually tune. Settings persist across power cycles — no extra save step.
 
 ### What to look and listen for
 
 The clearest failure modes, in order of subtlety:
 
-- **Pen drifts a visible amount** from the starting dot — classic step loss, answer `n`.
-- **Audible grindy/clacky noise** during the move — the motor is right at the edge of stalling even if `MPos:` looks right. Answer `n`.
+- **Pen drifts a visible amount** from the starting dot — classic step loss, click **Fail**.
+- **Audible grindy/clacky noise** during the move — the motor is right at the edge of stalling even if `MPos:` looks right. Click **Fail**.
 - **Pen stops short or overshoots** — the planner is hitting an internal limit the test didn't expect. Redo that test with a lower start value.
 
-### When to use `--fine`
+### When to use Fine mode
 
-Do a full coarse run first (leave the defaults). That'll get you in the ballpark but the 1.5× growth means the last-passing value is anywhere from 1.0× to 1.5× the _actual_ cliff. The tuned value (80% of that) is safe but possibly more conservative than it needs to be.
+Do a full **Coarse** run first (the default). That'll get you in the ballpark but the 1.5× growth means the last-passing value is anywhere from 1.0× to 1.5× the _actual_ cliff. The tuned value (80% of that) is safe but possibly more conservative than it needs to be.
 
-Follow up with `--fine` — it starts at 0.95× the stored value and steps 1.1× per iteration, backing off to 90% when you fail. You'll land within ~5% of the real cliff.
+Follow up by selecting **Fine** and starting again — it begins at 0.95× the stored value and steps 1.1× per iteration, backing off to 90% when you fail. You'll land within ~5% of the real cliff.
 
 ### Caps you don't tune
 
-The script skips `$111` (rapid feedrate). It writes `$111 = min($112, max($110, stored $111))` after the rest finishes — that gives you travel moves that are at least as fast as feed moves but never ask the motor for more than its tuned motor-rate cap.
+The tool skips `$111` (rapid feedrate). It writes `$111 = min($112, max($110, stored $111))` after the rest finishes — that gives you travel moves that are at least as fast as feed moves but never ask the motor for more than its tuned motor-rate cap.
 
-Everything else (`$100` steps/mm, `$151` servo pen-down) is physical calibration, not speed tuning — set those with a ruler and a test stroke, not with tune.py.
+Everything else (`$100` steps/mm, `$151` servo pen-down) is physical calibration, not speed tuning — set those with a ruler and a test stroke, not with the tuner.
 
 ## Reasonable numbers to aim for
 
@@ -128,4 +128,4 @@ Your mileage will differ, but to know if your results look sane:
 
 ## If you want to do it by hand
 
-The tests `tune.py` automates are just short G-code sequences. If you prefer driving it yourself from UGS / bCNC / any terminal, the patterns are in `tools/tune.py` — look at `pattern_a` through `pattern_d`. Start each test from a taped-down pen mark, send the pattern, then `?` and read back `MPos`. Back off to 80% when the pen misses its origin.
+The tests the tuner automates are just short G-code sequences. If you prefer driving it yourself from UGS / bCNC / any terminal, the patterns are in [`tools/lib/tune-engine.js`](tools/lib/tune-engine.js) — look at `patternA` through `patternD`. Start each test from a taped-down pen mark, send the pattern, then `?` and read back `MPos`. Back off to 80% when the pen misses its origin.

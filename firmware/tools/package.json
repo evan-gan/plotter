@@ -1,0 +1,20 @@
+{
+  "name": "plotter-tools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Serial tools for the custom CoreXY plotter firmware: REPL, G-code streamer, and a browser-based speed/accel tuner.",
+  "type": "commonjs",
+  "bin": {
+    "plotter-term": "term.js",
+    "plotter-stream": "stream.js",
+    "plotter-tune": "tune.js"
+  },
+  "scripts": {
+    "term": "node term.js",
+    "stream": "node stream.js",
+    "tune": "node tune.js"
+  },
+  "dependencies": {
+    "serialport": "^13.0.0"
+  }
+}
