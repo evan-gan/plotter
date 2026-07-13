@@ -1,7 +1,7 @@
 {
-  "motionScaler": 1.115,
-  "overheadPerMoveMs": 0.584,
-  "penMoveMs": 150.3,
-  "savedAt": "2026-07-08T02:16:34.733Z",
-  "note": "browser tuner"
+  "motionScaler": 1.0856,
+  "overheadPerMoveMs": 0.425,
+  "penMoveMs": 150.2,
+  "savedAt": "2026-07-12T18:29:16.945Z",
+  "note": "admin panel"
 }

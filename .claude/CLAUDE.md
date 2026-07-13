@@ -4,7 +4,8 @@ A custom 2-axis CoreXY pen plotter. It reuses the **stock Blot electronics**
 (Seeed XIAO RP2040 + A4988 stepper drivers + servo pen-lift) but has a
 **different CoreXY belt layout**, so the firmware's motor-mixing is selectable.
 
-This repo currently contains hardware notes and the firmware. The firmware is a
+This repo contains hardware notes, the firmware, and the **`software/` web
+stack** (queue/gallery site + Pi backend + SVG optimizer). The firmware is a
 GRBL-protocol-compatible G-code firmware based on
 [samdev-7/upgraded-blot](https://github.com/samdev-7/upgraded-blot) (a fork of
 Hack Club's Blot), slightly modified for a selectable CoreXY belt layout. The
@@ -15,6 +16,8 @@ in-tree, git-ignored).
 
 ```
 firmware/            ← THE firmware for this plotter (flash this). See below.
+software/            ← Web stack: SVG optimizer + Pi server + Svelte UX. See below.
+drawings/            ← Community gallery drawings (added via GitHub PRs).
 upgraded-blot-main/  ← Reference fork it was adapted from (git-ignored). Also
                        contains a Mac desktop UI in ui/ — not used here.
 photos/              ← Build photos.
@@ -22,6 +25,68 @@ BOM.md               ← Bill of materials.
 Journal.md, TODO.md  ← Build log and task list.
 README.md            ← Repo overview.
 ```
+
+## `software/` — the web stack (pnpm workspace, TS + Svelte, no frameworks)
+
+Three packages. **Run everything locally with `cd software && pnpm install &&
+pnpm local`** (builds, then serves the backend against a built-in firmware
+*simulator* + the Vite dev frontend — no hardware needed). `pnpm local:real`
+uses a real board. `pnpm test` runs the utils + backend suites. Full details in
+`software/README.md`.
+
+### `software/utils/` — pure-TS library (no deps): converters + optimizer
+| File | What it does |
+| ---- | ------------ |
+| `src/types.ts` | `Point`/`Polyline`/`Drawing`, distance + pen-up-distance + bbox helpers. |
+| `src/kd-tree.ts`, `src/union-find.ts` | 2-D k-d tree (radius + k-NN) and disjoint-set — the optimizer's spatial + connectivity primitives. |
+| `src/svg-path.ts` | SVG `<path d>` parser + bezier/arc flattening (recursive subdivision). |
+| `src/svg-parse.ts` | Whole SVG document → `Drawing` (shapes, nested transforms, defs-skipping, Y-flip + work-area fit). |
+| `src/svg-generate.ts` | `Drawing` → preview SVG (used by gallery/queue/submit thumbnails). |
+| `src/gcode-parse.ts`, `src/gcode-generate.ts` | G-code ⇄ `Drawing` (pen-aware; mirrors firmware modal state + arc chord math). `gcode-generate` also exports `retargetDrawFeed()` (rewrite an already-generated program's draw feed, guarded by `GENERATED_MARKER`) — used by the backend's refeed. |
+| `src/intersections.ts` | **Crossing-breakpoint pre-stage** for the optimizer: `splitPolylinesAtIntersections` finds every point where polylines cross each other or themselves (grid-accelerated segment intersection, not O(n²)) and splits the polylines there, so crossings become shared endpoints the tour can route *through*. Ink is unchanged (a split only adds a collinear vertex). Also exports `segmentIntersection`. |
+| `src/optimizer.ts` | **The path optimizer** (TODO.md algorithm): (optional crossing-split via `intersections.ts`) → endpoint merge → greedy chaining → greedy tour → alternating 2-opt/Or-opt → orientation DP. Minimizes pen-up distance. `OptimizeOptions.splitAtIntersections` (default **on**) enables the crossing-split pre-stage; the optimizer plans the tour both with and without splitting and keeps whichever scores lower (pen-up + per-lift penalty), so splitting can never regress a plot. `stats.splitAtIntersectionsApplied` reports whether the split plan won. |
+| `src/pipeline.ts` | One-call `prepareSvgPlot` / `prepareGcodePlot` → `{gcode, previewSvg, stats}`. |
+| `src/index.ts` | Public barrel. `tests/` = plain-JS harness over `dist/` (`pnpm test`, 47 checks). |
+
+### `software/backend/` — the Raspberry Pi server (node:http, no framework)
+Serial is **optional**: it runs disconnected and swaps in a firmware simulator
+when `PLOTTER_SIMULATE=1`. Reuses `firmware/tools/lib` for ETA/tuning/calibration.
+| File | What it does |
+| ---- | ------------ |
+| `src/server.ts` | Entry point: declarative route table over node:http; public + admin API; SSE; static hosting of the frontend build. `buildServices()` wires everything. On startup `main()` kicks off `gallery.refreshAll()` in the background (after connecting the simulated board so the tuned feed is used) to recompute every drawing's SVG→G-code from scratch. |
+| `src/config.ts` | All config from env vars (`ADMIN_PASSWORD`, `PLOTTER_SIMULATE`, `PORT`, `GALLERY_DIR`, `WORK_W/H_MM`, …). Finds the repo root. |
+| `src/connection.ts` | GRBL-protocol logic (ok/error, `?` status, `$$`, waitIdle), transport-agnostic base class. |
+| `src/serial-connection.ts` | Real USB-serial transport (lazy-loads `serialport`). |
+| `src/simulated-connection.ts` | **Built-in firmware simulator**: motion timeline, `?`/`!`/`~`/soft-reset, `$$`/`$N=`, pen dwell. Lets the whole stack run with no hardware. |
+| `src/serial-manager.ts` | Owns the single (optional) connection; connect-on-demand, drop/reconnect. |
+| `src/machine-lock.ts` | One mutex over everything that commands motion (runner/tuner/jog/shapes). |
+| `src/queue.ts` | Drawing queue + JSON DB (`data/queue.json` + per-job gcode/preview files), reorder, crash recovery. |
+| `src/runner.ts` | `PlotRunner`: streams a job with ok/error flow control; realtime pause/resume/abort (soft-reset). |
+| `src/machine.ts` | Jog, set-home, steppers, pen, settings read/write, `$RST=*`, diagnostic shapes. |
+| `src/tuner.ts` | Bridges `firmware/tools/lib` tune-engine + calibrate harness onto SSE (`tune:*`/`cal:*` events). |
+| `src/eta.ts` | ETA wrapper: firmware ETA engine + live `$$` + host calibration knobs. |
+| `src/gallery.ts` | `drawings/` folder → previews + ETAs, cached by mtime. `refreshAll()` force-clears the cache and reprocesses every drawing — called once at server startup (from `server.ts` `main()`) so gallery G-code always reflects the current optimizer/generator code after a deploy, not a stale cached result. **Enqueuing a gallery pick is treated exactly like a fresh upload:** the `/api/gallery/:id/enqueue` route calls `readSource(id)` to read the *original* `drawings/` file and re-prepares it through `SubmissionService` at enqueue time (SVG re-optimized, authored G-code streamed as-is), so the queued job's G-code + ETA use the board's *current* tuned feed and the latest optimizer — never a cached result. Only the preview SVG is cached to disk (the ETA in the list view is computed in-memory), so cached G-code is no longer written. |
+| `src/submissions.ts` | SVG/G-code in → optimized gcode + preview + ETA (drives `/api/estimate` + `/api/submit`). Generated draw (G1) strokes use the board's tuned max feed (`$110`, via `EtaService.liveMaxFeedMmMin()`), falling back to `DRAW_FEED_MM_MIN` (default 1500) when offline — so plots draw at the tuned speed, not the generator default. Same for gallery SVGs in `gallery.ts`. |
+| `src/refeed.ts` | `PlotRefeedService`: after the board is retuned / ETA-calibrated / a motion setting ($110-$122) is changed, rewrites the draw feed of already-queued jobs (and drops the gallery cache) to the board's *current* tuned `$110` and refreshes their ETAs. Only touches gcode we generated (identified by `GENERATED_MARKER` via `utils`' `retargetDrawFeed`); authored gcode is left byte-for-byte. Wired into `tuner.ts` (tune-complete + save-calibration), `machine.ts` (setSetting/resetDefaults), and `POST /api/admin/refeed`. No-op when no board is reachable (won't guess a feed). **Why this exists:** the firmware caps each move at `min($110, $112/motor-load)`, so a plot generated with a low `F` word draws slowly *even on a tuned board* — the ETA is accurate but the speed is left on the table. Refeeding lifts existing jobs to the tuned rate. |
+| `src/events.ts`, `src/http-util.ts`, `src/db.ts`, `src/firmware-bridge.ts` | SSE bus; HTTP helpers (JSON, admin-password check, static serving); atomic JSON store; typed `require()` bridge to `firmware/tools/lib`. |
+| `tests/` | HTTP + runner + queue + eta + refeed suites against the simulator (`pnpm test`, 23 checks). |
+
+### `software/frontend/` — static Svelte 5 + Vite SPA
+Hash-routed, talks to the backend over `/api` (proxied in dev, same-origin in
+prod). `src/pages/` = Home (GitHub-upload instructions), Submit (optimize +
+estimate), Queue, Gallery (ETAs), Admin (password-gated). `src/components/` =
+reusable pieces incl. the **componentized** `MachineControls`/`JogPad`,
+`TunerPanel`, `CalibrationPanel`, `SettingsTable`, `PlotControls`,
+`QueueManager`, `ConsoleLog`. `src/lib/` = `api.ts` (typed client), `stores.ts`
+(SSE fan-out), `router.ts`, `format.ts`. Tokens in `src/app.css`.
+
+> Svelte gotcha learned here: a `$:` auto-scroll effect that both reads and
+> reassigns a variable its own scroll handler sets is an infinite loop that
+> **freezes silently in production builds** (the dev-only "max update depth"
+> error is stripped). `ConsoleLog.svelte` uses `afterUpdate` + change-guards
+> instead. Verify UI changes in a real browser, not just `pnpm build`.
+
+Not yet built (TODO.md): camera / paper-alignment vision.
 
 ## `firmware/` — where to make changes
 

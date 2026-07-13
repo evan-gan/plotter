@@ -1,0 +1,9 @@
+packages:
+  - utils
+  - backend
+  - frontend
+# Native/postinstall builds these packages legitimately need:
+# serialport's C++ bindings and esbuild's platform binary.
+allowBuilds:
+  '@serialport/bindings-cpp': true
+  esbuild: true

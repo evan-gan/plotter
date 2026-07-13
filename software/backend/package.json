@@ -1,0 +1,21 @@
+{
+  "name": "plotter-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Raspberry Pi server for the plotter: drawing queue + DB, G-code runner, machine/tuning API, and static hosting for the frontend.",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsc && PLOTTER_SIMULATE=1 node dist/server.js",
+    "test": "tsc && node tests/run_all.js"
+  },
+  "dependencies": {
+    "plotter-utils": "workspace:*",
+    "serialport": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.0"
+  }
+}

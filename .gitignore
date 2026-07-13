@@ -2,3 +2,8 @@
 /upgraded-blot-main
 # Compiled firmware artifacts from `arduino-cli compile --output-dir build`
 /build
+
+# software/ (Node workspaces)
+node_modules/
+software/*/dist/
+software/backend/data/

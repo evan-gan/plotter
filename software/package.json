@@ -1,0 +1,12 @@
+{
+  "name": "plotter-software",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Workspace root for the plotter software stack: utils (converters + optimizer), backend (Pi server), frontend (Svelte UX).",
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "local": "node scripts/local.mjs",
+    "local:real": "node scripts/local.mjs --real"
+  }
+}
