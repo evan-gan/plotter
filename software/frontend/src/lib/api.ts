@@ -27,6 +27,42 @@ export interface OptimizeStats {
   penLiftsAfter: number;
 }
 
+export interface LayoutInfo {
+  orientation: "portrait" | "landscape";
+  paperWidthMm: number;
+  paperHeightMm: number;
+  paddingMm: number;
+  drawableWidthMm: number;
+  drawableHeightMm: number;
+  contentWidthMm: number;
+  contentHeightMm: number;
+  /** Top-left of the drawing in the operator's view (mm from page top-left). */
+  positionXMm: number;
+  positionYMm: number;
+  appliedScale: number;
+  maxFitScale: number;
+  /** Fraction of the max paper fit currently used, in (0,1]. */
+  fillFraction: number;
+  mirrorX: boolean;
+  /** True when the drawing extends past the printable margin. */
+  overflows: boolean;
+}
+
+export interface LayoutRequestInfo {
+  fillFraction: number | null;
+  orientation: "portrait" | "landscape" | null;
+  positionXMm: number | null;
+  positionYMm: number | null;
+}
+
+/** Fields accepted by `setLayout`; omit a field to keep it, null to reset to auto. */
+export interface LayoutPatch {
+  fillFraction?: number | null;
+  orientation?: "portrait" | "landscape" | null;
+  positionXMm?: number | null;
+  positionYMm?: number | null;
+}
+
 export interface Job {
   id: string;
   name: string;
@@ -36,6 +72,10 @@ export interface Job {
   etaSeconds: number | null;
   lineCount: number;
   stats: OptimizeStats | null;
+  layout: LayoutInfo | null;
+  layoutRequest: LayoutRequestInfo | null;
+  sourceKind: "svg" | "gcode" | null;
+  optimize: boolean;
   error: string | null;
 }
 
@@ -54,6 +94,14 @@ export interface SubmissionPreview {
   gcodeLineCount: number;
   eta: EtaBreakdown;
   stats: OptimizeStats | null;
+  layout: LayoutInfo | null;
+}
+
+export interface PaperInfo {
+  shortMm: number;
+  longMm: number;
+  paddingMm: number;
+  mirrorX: boolean;
 }
 
 export interface StatusSnapshot {
@@ -63,6 +111,7 @@ export interface StatusSnapshot {
   queueLength: number;
   simulated: boolean;
   workArea: { widthMm: number; heightMm: number };
+  paper: PaperInfo;
   adminEnabled: boolean;
 }
 
@@ -100,6 +149,8 @@ export const api = {
   abort: () => post("/api/admin/abort", {}, true),
   reorder: (order: string[]) => post<{ jobs: Job[] }>("/api/admin/queue/reorder", { order }, true),
   deleteJob: (id: string) => request<{ jobs: Job[] }>(`/api/admin/queue/${id}`, { method: "DELETE" }, true),
+  setLayout: (id: string, patch: LayoutPatch) =>
+    post<{ job: Job; jobs: Job[] }>(`/api/admin/queue/${id}/layout`, patch, true),
   connect: () => post("/api/admin/connect", {}, true),
   jog: (dx: number, dy: number, feed?: number) => post("/api/admin/jog", { dx, dy, feed }, true),
   setHome: () => post("/api/admin/home", {}, true),

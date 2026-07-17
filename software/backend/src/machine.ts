@@ -113,6 +113,9 @@ export class MachineService {
     const connection = await this.serial.ensure();
     await this.sendChecked(connection, "M17");
     await this.sendChecked(connection, "G92 X0 Y0");
+    // The firmware's `?` keeps reporting machine position after a G92, so mirror
+    // the new work origin host-side — this is what snaps the UI marker to (0,0).
+    await connection.captureWorkOrigin();
     this.bus.log("Zeroed — this position is now X0 Y0.");
   }
 

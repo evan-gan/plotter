@@ -8,4 +8,5 @@ export { gcodeToDrawing } from "./gcode-parse";
 export { drawingToGcode, retargetDrawFeed, GENERATED_MARKER, GcodeGenerateOptions } from "./gcode-generate";
 export { optimizePolylines, mergeAndChain, OptimizeOptions, OptimizeStats } from "./optimizer";
 export { splitPolylinesAtIntersections, segmentIntersection } from "./intersections";
+export { layoutOnPaper, machineToPaperView, PaperLayoutOptions, PaperLayoutResult, PaperOrientation } from "./layout";
 export { prepareSvgPlot, prepareGcodePlot, PreparedPlot, PreparePlotOptions } from "./pipeline";

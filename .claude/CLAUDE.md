@@ -45,8 +45,9 @@ uses a real board. `pnpm test` runs the utils + backend suites. Full details in
 | `src/gcode-parse.ts`, `src/gcode-generate.ts` | G-code ⇄ `Drawing` (pen-aware; mirrors firmware modal state + arc chord math). `gcode-generate` also exports `retargetDrawFeed()` (rewrite an already-generated program's draw feed, guarded by `GENERATED_MARKER`) — used by the backend's refeed. |
 | `src/intersections.ts` | **Crossing-breakpoint pre-stage** for the optimizer: `splitPolylinesAtIntersections` finds every point where polylines cross each other or themselves (grid-accelerated segment intersection, not O(n²)) and splits the polylines there, so crossings become shared endpoints the tour can route *through*. Ink is unchanged (a split only adds a collinear vertex). Also exports `segmentIntersection`. |
 | `src/optimizer.ts` | **The path optimizer** (TODO.md algorithm): (optional crossing-split via `intersections.ts`) → endpoint merge → greedy chaining → greedy tour → alternating 2-opt/Or-opt → orientation DP. Minimizes pen-up distance. `OptimizeOptions.splitAtIntersections` (default **on**) enables the crossing-split pre-stage; the optimizer plans the tour both with and without splitting and keeps whichever scores lower (pen-up + per-lift penalty), so splitting can never regress a plot. `stats.splitAtIntersectionsApplied` reports whether the split plan won. |
-| `src/pipeline.ts` | One-call `prepareSvgPlot` / `prepareGcodePlot` → `{gcode, previewSvg, stats}`. |
-| `src/index.ts` | Public barrel. `tests/` = plain-JS harness over `dist/` (`pnpm test`, 47 checks). |
+| `src/layout.ts` | **Paper placement** (`layoutOnPaper`): takes an optimized `Drawing` and places it on a physical sheet for hand-aligned plotting — auto-picks portrait/landscape (whichever fits largest), scales to fit (shrink-to-fit by default, never enlarges past 1:1 unless `fillFraction` asks), mirrors X so it reads correctly when the head starts at the paper's **bottom-right corner**, and anchors the content to that corner. Returns the placed drawing + metadata (`orientation`, `paperWidth/HeightMm`, `contentWidth/HeightMm`, `appliedScale`, `maxFitScale`, `fillFraction`) used by the admin overlay + scale control. |
+| `src/pipeline.ts` | One-call `prepareSvgPlot` / `prepareGcodePlot` → `{gcode, previewSvg, stats, layout}`. When `paper` options are passed it applies `layoutOnPaper` **after** optimize and **before** gcode generation (the preview SVG still renders the artwork in its natural, un-mirrored orientation). Authored G-code (`optimize:false`) is never placed. |
+| `src/index.ts` | Public barrel. `tests/` = plain-JS harness over `dist/` (`pnpm test`, 63 checks). |
 
 ### `software/backend/` — the Raspberry Pi server (node:http, no framework)
 Serial is **optional**: it runs disconnected and swaps in a firmware simulator
@@ -54,22 +55,22 @@ when `PLOTTER_SIMULATE=1`. Reuses `firmware/tools/lib` for ETA/tuning/calibratio
 | File | What it does |
 | ---- | ------------ |
 | `src/server.ts` | Entry point: declarative route table over node:http; public + admin API; SSE; static hosting of the frontend build. `buildServices()` wires everything. On startup `main()` kicks off `gallery.refreshAll()` in the background (after connecting the simulated board so the tuned feed is used) to recompute every drawing's SVG→G-code from scratch. |
-| `src/config.ts` | All config from env vars (`ADMIN_PASSWORD`, `PLOTTER_SIMULATE`, `PORT`, `GALLERY_DIR`, `WORK_W/H_MM`, …). Finds the repo root. |
-| `src/connection.ts` | GRBL-protocol logic (ok/error, `?` status, `$$`, waitIdle), transport-agnostic base class. |
+| `src/config.ts` | All config from env vars (`ADMIN_PASSWORD`, `PLOTTER_SIMULATE`, `PORT`, `GALLERY_DIR`, `WORK_W/H_MM`, …). Also the **paper** config (`PAPER_SHORT_MM`/`PAPER_LONG_MM` default to the largest US-Letter-proportioned sheet that fits the work area either way up, `PAPER_PADDING_MM`=12.7 (½″), `PAPER_MIRROR_X`=1) + `paperLayoutOptions()` helper that maps it onto `layoutOnPaper`. Finds the repo root. |
+| `src/connection.ts` | GRBL-protocol logic (ok/error, `?` status, `$$`, waitIdle), transport-agnostic base class. **Tracks a host-side G92 work-origin offset**: the firmware's `?` only reports MACHINE position (`MPos`), which a `G92` re-zero never changes, so `status()` subtracts a stored origin to report the **work** position (the zeroed frame the UI marker + plots use). `captureWorkOrigin()` records the current machine position as (0,0) — called by `machine.ts` right after it sends `G92 X0 Y0`. (The simulator moves its reported position on G92, so its offset stays 0 — no double-count.) |
 | `src/serial-connection.ts` | Real USB-serial transport (lazy-loads `serialport`). |
 | `src/simulated-connection.ts` | **Built-in firmware simulator**: motion timeline, `?`/`!`/`~`/soft-reset, `$$`/`$N=`, pen dwell. Lets the whole stack run with no hardware. |
 | `src/serial-manager.ts` | Owns the single (optional) connection; connect-on-demand, drop/reconnect. |
 | `src/machine-lock.ts` | One mutex over everything that commands motion (runner/tuner/jog/shapes). |
-| `src/queue.ts` | Drawing queue + JSON DB (`data/queue.json` + per-job gcode/preview files), reorder, crash recovery. |
+| `src/queue.ts` | Drawing queue + JSON DB (`data/queue.json` + per-job gcode/preview/**source** files), reorder, crash recovery. Jobs carry `layout` (resolved paper-placement metadata: paper/drawable/content dims, position, scale, `overflows` — drives the canvas), the admin's `layoutRequest` (persisted scale/orientation/position overrides, re-applied on regeneration), `sourceKind`, and `optimize`; the retained `.source` file lets the admin re-place a queued job. |
 | `src/runner.ts` | `PlotRunner`: streams a job with ok/error flow control; realtime pause/resume/abort (soft-reset). |
-| `src/machine.ts` | Jog, set-home, steppers, pen, settings read/write, `$RST=*`, diagnostic shapes. |
+| `src/machine.ts` | Jog, set-home, steppers, pen, settings read/write, `$RST=*`, diagnostic shapes. `setHome()` sends `G92 X0 Y0` then calls `connection.captureWorkOrigin()` so the reported position (and UI marker) snaps to the origin on zero. |
 | `src/tuner.ts` | Bridges `firmware/tools/lib` tune-engine + calibrate harness onto SSE (`tune:*`/`cal:*` events). |
 | `src/eta.ts` | ETA wrapper: firmware ETA engine + live `$$` + host calibration knobs. |
-| `src/gallery.ts` | `drawings/` folder → previews + ETAs, cached by mtime. `refreshAll()` force-clears the cache and reprocesses every drawing — called once at server startup (from `server.ts` `main()`) so gallery G-code always reflects the current optimizer/generator code after a deploy, not a stale cached result. **Enqueuing a gallery pick is treated exactly like a fresh upload:** the `/api/gallery/:id/enqueue` route calls `readSource(id)` to read the *original* `drawings/` file and re-prepares it through `SubmissionService` at enqueue time (SVG re-optimized, authored G-code streamed as-is), so the queued job's G-code + ETA use the board's *current* tuned feed and the latest optimizer — never a cached result. Only the preview SVG is cached to disk (the ETA in the list view is computed in-memory), so cached G-code is no longer written. |
-| `src/submissions.ts` | SVG/G-code in → optimized gcode + preview + ETA (drives `/api/estimate` + `/api/submit`). Generated draw (G1) strokes use the board's tuned max feed (`$110`, via `EtaService.liveMaxFeedMmMin()`), falling back to `DRAW_FEED_MM_MIN` (default 1500) when offline — so plots draw at the tuned speed, not the generator default. Same for gallery SVGs in `gallery.ts`. |
+| `src/gallery.ts` | `drawings/` folder → previews + ETAs, cached by mtime. `refreshAll()` force-clears the cache and reprocesses every drawing — called once at server startup (from `server.ts` `main()`) so gallery G-code always reflects the current optimizer/generator code after a deploy, not a stale cached result. **Enqueuing a gallery pick is treated exactly like a fresh upload:** the `/api/gallery/:id/enqueue` route calls `readSource(id)` to read the *original* `drawings/` file and re-prepares it through `SubmissionService` at enqueue time (SVG re-optimized, authored G-code streamed as-is), so the queued job's G-code + ETA use the board's *current* tuned feed and the latest optimizer — never a cached result. Only the preview SVG is cached to disk (the ETA in the list view is computed in-memory), so cached G-code is no longer written. SVG entries are **paper-placed** (via `paperLayoutOptions(config)`) so the gallery ETA reflects the plot that would actually run. |
+| `src/submissions.ts` | SVG/G-code in → optimized + **paper-placed** gcode + preview + ETA (drives `/api/estimate` + `/api/submit`). Passes `paperLayoutOptions(config, layoutRequest)` into the pipeline, saves the source + `layout` + the admin's `layoutRequest` on the job, and exposes `setLayout(jobId, patch)` — merge a placement patch (scale / orientation / position) onto the job's stored request and regenerate its gcode/preview/ETA/layout (drives `POST /api/admin/queue/:id/layout`). Generated draw (G1) strokes use the board's tuned max feed (`$110`, via `EtaService.liveMaxFeedMmMin()`), falling back to `DRAW_FEED_MM_MIN` (default 1500) when offline — so plots draw at the tuned speed, not the generator default. Same for gallery SVGs in `gallery.ts`. |
 | `src/refeed.ts` | `PlotRefeedService`: after the board is retuned / ETA-calibrated / a motion setting ($110-$122) is changed, rewrites the draw feed of already-queued jobs (and drops the gallery cache) to the board's *current* tuned `$110` and refreshes their ETAs. Only touches gcode we generated (identified by `GENERATED_MARKER` via `utils`' `retargetDrawFeed`); authored gcode is left byte-for-byte. Wired into `tuner.ts` (tune-complete + save-calibration), `machine.ts` (setSetting/resetDefaults), and `POST /api/admin/refeed`. No-op when no board is reachable (won't guess a feed). **Why this exists:** the firmware caps each move at `min($110, $112/motor-load)`, so a plot generated with a low `F` word draws slowly *even on a tuned board* — the ETA is accurate but the speed is left on the table. Refeeding lifts existing jobs to the tuned rate. |
 | `src/events.ts`, `src/http-util.ts`, `src/db.ts`, `src/firmware-bridge.ts` | SSE bus; HTTP helpers (JSON, admin-password check, static serving); atomic JSON store; typed `require()` bridge to `firmware/tools/lib`. |
-| `tests/` | HTTP + runner + queue + eta + refeed suites against the simulator (`pnpm test`, 23 checks). |
+| `tests/` | HTTP + runner + queue + eta + refeed + **layout** + **work-origin** suites against the simulator (`pnpm test`, 32 checks). |
 
 ### `software/frontend/` — static Svelte 5 + Vite SPA
 Hash-routed, talks to the backend over `/api` (proxied in dev, same-origin in
@@ -77,8 +78,30 @@ prod). `src/pages/` = Home (GitHub-upload instructions), Submit (optimize +
 estimate), Queue, Gallery (ETAs), Admin (password-gated). `src/components/` =
 reusable pieces incl. the **componentized** `MachineControls`/`JogPad`,
 `TunerPanel`, `CalibrationPanel`, `SettingsTable`, `PlotControls`,
-`QueueManager`, `ConsoleLog`. `src/lib/` = `api.ts` (typed client), `stores.ts`
-(SSE fan-out), `router.ts`, `format.ts`. Tokens in `src/app.css`.
+`QueueManager`, `ConsoleLog`.
+
+**Admin is a CNC-style dashboard** (`AdminPage.svelte`): a plot-setup view on
+top, the queue below it, and everything else in a right-hand drawer — designed
+to fit the viewport with minimal scrolling.
+- `PlotSetup.svelte` — the centerpiece. Shows the *current* job (the one
+  plotting, else the next queued), an orientation toggle (Auto / Portrait /
+  Landscape), a scale slider + number input, the paper canvas, and the plot
+  controls (Start / Pause / Abort) + progress. Polls `/api/status` (~1.5 s) for
+  the live pen position + machine state. **Setup is editable only when idle** —
+  drag / scale / orientation / Start all lock while a plot runs. Placement edits
+  call `api.setLayout` → `POST /api/admin/queue/:id/layout`.
+- `PaperCanvas.svelte` — the interactive sheet (operator-view SVG in mm). Draws
+  the sheet, the printable margin, the **real drawing preview** (an `<image>` of
+  the job preview scaled into its placement box), a **live pen-head crosshair**
+  (machine `mx/my` → page coords), and a red overflow warning. **Drag** the
+  drawing to reposition, **corner handle** to resize; commits an explicit
+  position/scale patch on pointer-up. Overflow past the margin is allowed (warned,
+  not blocked).
+- `AdvancedDrawer.svelte` — right slide-out with tabbed `MachineControls`,
+  `ShapesPanel`, `TunerPanel`, `CalibrationPanel`, `SettingsTable`, `ConsoleLog`.
+
+`src/lib/` = `api.ts` (typed client — `setLayout`, `LayoutInfo`/`LayoutPatch`),
+`stores.ts` (SSE fan-out), `router.ts`, `format.ts`. Tokens in `src/app.css`.
 
 > Svelte gotcha learned here: a `$:` auto-scroll effect that both reads and
 > reassigns a variable its own scroll handler sets is an infinite loop that
@@ -153,6 +176,33 @@ three are the remaining physically distinct belt routings. The rest of the
 firmware never sees the layout — it only calls the three functions in
 `kinematics.h`. Which layout is correct is determined by the bench test in
 `FIRMWARE_INSTRUCTIONS.md`.
+
+## Key design fact: paper placement (start-corner alignment)
+
+Every generated plot is placed on a physical sheet for **hand alignment**: the
+operator sets the pen head half an inch (`PAPER_PADDING_MM`) in from a known
+corner and zeroes there. Which corner depends on the machine's X-axis direction,
+selected by `PAPER_MIRROR_X`:
+- **`false` (default)** — standard machine: +X points **right** (jog `←` = −X
+  moves the head left), +Y up. Origin (0,0) is the **bottom-left** corner; the
+  drawing is anchored there and drawn un-mirrored.
+- **`true`** — mirrored mounting: the head starts at the **bottom-right** corner
+  with +X pointing **left**; the drawing is anchored bottom-right.
+
+`layoutOnPaper` (`utils/src/layout.ts`) (1) auto-picks portrait/landscape to fit
+the drawing largest (admins can override), (2) scales it (shrink-to-fit by
+default; admins can scale up/down), (3) works in the **operator's view** (the
+sheet as you look at it) and reflects that into the machine frame per `mirrorX`
+— so the plot reads correctly without a separate mirror step, and (4) positions
+the drawing — anchored to the start corner by default, but **freely draggable**
+on the admin canvas. `machineToPaperView()` inverts the reflection so the live
+pen head can be drawn on the canvas. The admin edits scale/orientation/position on the
+`PaperCanvas` (drag + resize + orientation toggle); each edit hits
+`POST /api/admin/queue/:id/layout`, which merges the patch onto the job's stored
+`layoutRequest` and re-runs the pipeline from the retained source. Overflow past
+the margin is allowed but flagged (`layout.overflows`). Authored G-code streamed
+as-is (`optimize:false`) is **not** placed — its own coordinates are trusted.
+Config: `PAPER_SHORT_MM`/`PAPER_LONG_MM`/`PAPER_PADDING_MM`/`PAPER_MIRROR_X`.
 
 ## Key design fact: two separate settings stores (board vs. host)
 

@@ -58,35 +58,47 @@
     <p class="muted">No queued jobs.</p>
   {/if}
   {#each queued as job, index (job.id)}
-    <div class="row">
-      <span class="mono position">{index + 1}</span>
-      <img class="thumb" src={`/api/jobs/${job.id}/preview.svg`} alt="" loading="lazy" />
-      <div class="info">
-        <strong>{job.name}</strong>
-        <EtaBadge seconds={job.etaSeconds} />
-      </div>
-      <div class="controls">
-        <button title="Move up" disabled={index === 0} on:click={() => move(index, -1)}>↑</button>
-        <button title="Move down" disabled={index === queued.length - 1} on:click={() => move(index, 1)}>↓</button>
-        <button title="Plot this one next" on:click={() => startThis(job)}>▶</button>
-        <button class="danger" title="Delete" on:click={() => remove(job)}>✕</button>
+    <div class="entry">
+      <div class="row">
+        <span class="mono position">{index + 1}</span>
+        <img class="thumb" src={`/api/jobs/${job.id}/preview.svg`} alt="" loading="lazy" />
+        <div class="info">
+          <strong>{job.name}</strong>
+          <EtaBadge seconds={job.etaSeconds} />
+          {#if job.layout}
+            <span class="muted small">{job.layout.orientation} · {Math.round(job.layout.fillFraction * 100)}%</span>
+            {#if job.layout.overflows}<span class="warn small" title="Extends past the printable margin">⚠ off-margin</span>{/if}
+          {/if}
+        </div>
+        <div class="controls">
+          <button title="Move up" disabled={index === 0} on:click={() => move(index, -1)}>↑</button>
+          <button title="Move down" disabled={index === queued.length - 1} on:click={() => move(index, 1)}>↓</button>
+          <button title="Plot this one next" on:click={() => startThis(job)}>▶</button>
+          <button class="danger" title="Delete" on:click={() => remove(job)}>✕</button>
+        </div>
       </div>
     </div>
   {/each}
 </div>
 
 <style>
+  .entry {
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .entry:last-child { border-bottom: none; }
+
   .row {
     display: grid;
     grid-template-columns: 1.6em 52px 1fr auto;
     gap: var(--space-2);
     align-items: center;
-    padding: var(--space-2) 0;
-    border-bottom: 1px solid var(--border);
   }
 
-  .row:last-child { border-bottom: none; }
   .position { color: var(--text-dim); text-align: center; }
+  .small { font-size: 0.8em; }
+  .warn { color: var(--danger); }
 
   .thumb {
     width: 52px;

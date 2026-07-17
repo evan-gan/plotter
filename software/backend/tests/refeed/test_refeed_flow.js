@@ -30,7 +30,12 @@ const LONG_SVG = `<svg xmlns="http://www.w3.org/2000/svg">
 function makeWorld() {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "refeed-data-"));
   const galleryDir = fs.mkdtempSync(path.join(os.tmpdir(), "refeed-gallery-"));
-  const config = { dataDir, galleryDir, workWidthMm: 400, workHeightMm: 400, drawFeedMmMin: 1500 };
+  // Paper large enough that the 300 mm test line still cruises (isn't shrunk):
+  // landscape drawable ≈ 374.6 mm, so the line keeps its length at 1:1.
+  const config = {
+    dataDir, galleryDir, workWidthMm: 400, workHeightMm: 400, drawFeedMmMin: 1500,
+    paperShortMm: 400 * (8.5 / 11), paperLongMm: 400, paperPaddingMm: 12.7, paperMirrorX: true,
+  };
   const bus = new EventBus();
   const serial = new SerialManager({ simulate: true, preferredPort: "", bus });
   const eta = new EtaService(serial);

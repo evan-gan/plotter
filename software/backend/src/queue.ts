@@ -9,6 +9,41 @@ import { JsonStore } from "./db";
 
 export type JobStatus = "queued" | "plotting" | "paused" | "done" | "aborted" | "failed";
 
+/**
+ * Paper-placement metadata for the admin overlay + scale control. Mirrors
+ * `PaperLayoutResult` from plotter-utils minus the geometry. Null for jobs that
+ * weren't placed on paper (e.g. authored G-code streamed as-is).
+ */
+export interface LayoutInfo {
+  orientation: "portrait" | "landscape";
+  paperWidthMm: number;
+  paperHeightMm: number;
+  paddingMm: number;
+  /** Padded printable area (paper minus 2× padding), mm. */
+  drawableWidthMm: number;
+  drawableHeightMm: number;
+  contentWidthMm: number;
+  contentHeightMm: number;
+  /** Top-left of the drawing in the operator's view (mm from page top-left). */
+  positionXMm: number;
+  positionYMm: number;
+  appliedScale: number;
+  maxFitScale: number;
+  /** Fraction of the max fit currently used, in (0,1]. Drives the scale slider. */
+  fillFraction: number;
+  mirrorX: boolean;
+  /** True when the drawing extends past the padded printable area. */
+  overflows: boolean;
+}
+
+/** The admin's persisted placement overrides, re-applied on any regeneration. */
+export interface LayoutRequestInfo {
+  fillFraction: number | null;
+  orientation: "portrait" | "landscape" | null;
+  positionXMm: number | null;
+  positionYMm: number | null;
+}
+
 export interface Job {
   id: string;
   name: string;
@@ -21,6 +56,14 @@ export interface Job {
   lineCount: number;
   /** Optimizer stats (pen-up mm before/after, lifts) when it ran. */
   stats: Record<string, number> | null;
+  /** Paper placement + scale info; null when the job isn't paper-placed. */
+  layout: LayoutInfo | null;
+  /** Admin's placement overrides, re-applied when the job is regenerated. */
+  layoutRequest: LayoutRequestInfo | null;
+  /** Kind of the retained source, so a rescale can regenerate. Null = no source kept. */
+  sourceKind: "svg" | "gcode" | null;
+  /** Whether the source is (re)optimized when regenerating. */
+  optimize: boolean;
   error: string | null;
 }
 
@@ -81,6 +124,20 @@ export class QueueService {
     return path.join(this.jobsDir, `${jobId}.svg`);
   }
 
+  /** Retained original source (SVG/G-code) so a job can be rescaled later. */
+  sourcePath(jobId: string): string {
+    return path.join(this.jobsDir, `${jobId}.source`);
+  }
+
+  /** Read a job's retained source, or null if none was kept. */
+  readSource(jobId: string): string | null {
+    try {
+      return fs.readFileSync(this.sourcePath(jobId), "utf8");
+    } catch {
+      return null;
+    }
+  }
+
   add(input: {
     name: string;
     source: Job["source"];
@@ -88,6 +145,11 @@ export class QueueService {
     previewSvg: string;
     etaSeconds: number | null;
     stats: Record<string, number> | null;
+    layout?: LayoutInfo | null;
+    layoutRequest?: LayoutRequestInfo | null;
+    sourceText?: string | null;
+    sourceKind?: Job["sourceKind"];
+    optimize?: boolean;
   }): Job {
     const job: Job = {
       id: crypto.randomBytes(6).toString("hex"),
@@ -100,13 +162,27 @@ export class QueueService {
       etaSeconds: input.etaSeconds,
       lineCount: input.gcode.split("\n").filter((line) => line.trim() && !line.trim().startsWith(";")).length,
       stats: input.stats,
+      layout: input.layout ?? null,
+      layoutRequest: input.layoutRequest ?? null,
+      sourceKind: input.sourceKind ?? null,
+      optimize: input.optimize ?? true,
       error: null,
     };
     fs.writeFileSync(this.gcodePath(job.id), input.gcode);
     fs.writeFileSync(this.previewPath(job.id), input.previewSvg);
+    // Keep the source only when it can be re-prepared (so the admin can rescale).
+    if (input.sourceText != null && input.sourceKind) {
+      fs.writeFileSync(this.sourcePath(job.id), input.sourceText);
+    }
     this.document.jobs.push(job);
     this.persist();
     return job;
+  }
+
+  /** Overwrite a job's generated files (used when regenerating at a new scale). */
+  writeGenerated(jobId: string, gcode: string, previewSvg: string): void {
+    fs.writeFileSync(this.gcodePath(jobId), gcode);
+    fs.writeFileSync(this.previewPath(jobId), previewSvg);
   }
 
   /** Reorder the *queued* jobs to match `orderedIds` (others keep position). */
@@ -129,7 +205,7 @@ export class QueueService {
       throw new Error("Can't delete a job that is currently plotting — abort it first.");
     }
     this.document.jobs = this.document.jobs.filter((entry) => entry.id !== jobId);
-    for (const file of [this.gcodePath(jobId), this.previewPath(jobId)]) {
+    for (const file of [this.gcodePath(jobId), this.previewPath(jobId), this.sourcePath(jobId)]) {
       try {
         fs.unlinkSync(file);
       } catch {

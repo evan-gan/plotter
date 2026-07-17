@@ -8,7 +8,7 @@ import crypto from "crypto";
 import { prepareSvgPlot, prepareGcodePlot, PreparedPlot } from "plotter-utils";
 import { JsonStore } from "./db";
 import { EtaService } from "./eta";
-import { BackendConfig } from "./config";
+import { BackendConfig, paperLayoutOptions } from "./config";
 
 export interface GalleryEntry {
   id: string;
@@ -121,9 +121,12 @@ export class GalleryService {
       // Draw at the board's tuned max feed ($110), matching the submit path;
       // fall back to the configured default when no board is reachable.
       const feedMmMin = (await this.eta.liveMaxFeedMmMin()) ?? this.config.drawFeedMmMin;
+      // Place on paper (orientation/scale/mirror/bottom-right anchor) so the
+      // gallery ETA reflects the plot that would actually run when enqueued.
       return prepareSvgPlot(source, {
         svg: { fitWidthMm: this.config.workWidthMm, fitHeightMm: this.config.workHeightMm },
         gcode: { feedMmMin },
+        paper: paperLayoutOptions(this.config),
       });
     }
     // Pre-made G-code is trusted as-is (no re-optimization: the author's

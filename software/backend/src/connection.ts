@@ -67,8 +67,17 @@ export abstract class BaseConnection extends EventEmitter {
     return match ? (`error:${Number(match[1])}` as SendResult) : "timeout";
   }
 
-  /** `?` realtime status query. */
-  async status(timeoutMs = 800): Promise<MachineStatus> {
+  // Host-side G92 work-origin offset, in machine mm. The firmware's `?` only
+  // ever reports MACHINE position (MPos), which a G92 re-zero does NOT change —
+  // so on its own the UI marker never moves when you zero. We mirror the zero
+  // here: captureWorkOrigin() records the machine position at the moment of a
+  // `G92 X0 Y0`, and status() subtracts it to report the WORK position (the
+  // frame the operator zeroes in and every plot is drawn in).
+  private workOriginX = 0;
+  private workOriginY = 0;
+
+  /** Raw `?` query returning the firmware's machine position, un-offset. */
+  private async rawStatus(timeoutMs: number): Promise<MachineStatus> {
     const replyPromise = this.waitFor(/<\w+\|MPos:[-\d.]+,[-\d.]+/, timeoutMs);
     this.sendRaw("?");
     const line = await replyPromise;
@@ -76,6 +85,24 @@ export abstract class BaseConnection extends EventEmitter {
     const match = line.match(/<(\w+)\|MPos:([-\d.]+),([-\d.]+)/);
     if (!match) return { state: "Unknown", mx: 0, my: 0 };
     return { state: match[1], mx: parseFloat(match[2]), my: parseFloat(match[3]) };
+  }
+
+  /** `?` realtime status query, reported in the zeroed (work) frame. */
+  async status(timeoutMs = 800): Promise<MachineStatus> {
+    const machine = await this.rawStatus(timeoutMs);
+    return { state: machine.state, mx: machine.mx - this.workOriginX, my: machine.my - this.workOriginY };
+  }
+
+  /**
+   * Record the current machine position as the work origin (0,0). Call right
+   * after sending `G92 X0 Y0` so the reported/UI position tracks the zeroed
+   * frame. On failure to read a position, leaves the previous origin in place.
+   */
+  async captureWorkOrigin(): Promise<void> {
+    const machine = await this.rawStatus(800);
+    if (machine.state === "Unknown") return;
+    this.workOriginX = machine.mx;
+    this.workOriginY = machine.my;
   }
 
   /** Poll `?` until the firmware reports Idle. */

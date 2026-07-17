@@ -47,6 +47,9 @@ The backend serves the built frontend itself, so the Pi is the whole website:
 | `DATA_DIR` | `software/backend/data` | Queue DB + job files. |
 | `GALLERY_DIR` | `<repo>/drawings` | Gallery source folder (PR'd drawings). |
 | `WORK_W_MM` / `WORK_H_MM` | `120` / `120` | Work area uploads are scaled to fit. |
+| `PAPER_SHORT_MM` / `PAPER_LONG_MM` | largest US-Letter-proportioned sheet fitting the work area (≈`92.7` / `120`) | Physical sheet drawings are placed on. Auto-oriented (portrait/landscape) + scaled to fit. |
+| `PAPER_PADDING_MM` | `12.7` (½″) | Blank margin kept on every edge of the sheet. |
+| `PAPER_MIRROR_X` | `0` | Mounting/axis direction. `0` (default) = standard machine, +X points right (jog `←` = −X moves left), drawing anchored to the **bottom-left** start corner. `1` = mirrored mounting, head starts at the **bottom-right** corner with +X pointing left. |
 | `DRAW_FEED_MM_MIN` | `1500` | **Fallback** pen-down draw feed. At runtime the board's tuned `$110` is used instead; this only applies when no board is reachable. |
 | `STATIC_DIR` | `software/frontend/dist` | Frontend build to serve. |
 

@@ -75,6 +75,12 @@ function buildRoutes(services: Services): Route[] {
       queueLength: queue.pending().length,
       simulated: config.simulate,
       workArea: { widthMm: config.workWidthMm, heightMm: config.workHeightMm },
+      paper: {
+        shortMm: config.paperShortMm,
+        longMm: config.paperLongMm,
+        paddingMm: config.paperPaddingMm,
+        mirrorX: config.paperMirrorX,
+      },
       adminEnabled: Boolean(config.adminPassword),
     });
   });
@@ -160,6 +166,38 @@ function buildRoutes(services: Services): Route[] {
     queue.remove(params.id);
     sendJson(res, 200, { jobs: queue.list() });
   });
+  // Re-place a queued job on the paper — scale, orientation, and/or position —
+  // regenerating its G-code + preview + ETA. Only the fields present in the body
+  // change; a field set to null resets to auto; omitted fields are unchanged.
+  add("POST", "/api/admin/queue/:id/layout", true, async (req, res, params) => {
+    const body = await readJsonBody(req);
+    const patch: Record<string, unknown> = {};
+    if ("fillFraction" in body) {
+      const raw = body.fillFraction;
+      if (raw != null && (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0 || raw > 1)) {
+        return sendError(res, 400, "fillFraction must be a number in (0, 1], or null.");
+      }
+      patch.fillFraction = raw == null ? null : Number(raw);
+    }
+    if ("orientation" in body) {
+      const raw = body.orientation;
+      if (raw != null && raw !== "portrait" && raw !== "landscape") {
+        return sendError(res, 400, "orientation must be 'portrait', 'landscape', or null.");
+      }
+      patch.orientation = raw ?? null;
+    }
+    for (const key of ["positionXMm", "positionYMm"]) {
+      if (key in body) {
+        const raw = body[key];
+        if (raw != null && (typeof raw !== "number" || !Number.isFinite(raw))) {
+          return sendError(res, 400, `${key} must be a number or null.`);
+        }
+        patch[key] = raw == null ? null : Number(raw);
+      }
+    }
+    const job = await submissions.setLayout(params.id, patch);
+    sendJson(res, 200, { job, jobs: queue.list() });
+  });
 
   // ── admin: machine controls ──
   add("POST", "/api/admin/connect", true, async (_req, res) => sendJson(res, 200, await machine.connect()));
@@ -234,6 +272,29 @@ function buildRoutes(services: Services): Route[] {
   return routes;
 }
 
+/**
+ * Re-place queued jobs whose baked-in mounting no longer matches the current
+ * `PAPER_MIRROR_X` config, so a config change (e.g. correcting the X-axis
+ * direction) takes effect on jobs already in the queue — not just new ones.
+ * Preserves each job's scale/orientation/position (re-applies its stored
+ * layoutRequest); only jobs with a retained source can be re-placed.
+ */
+async function relayoutStaleQueuedJobs(services: Services): Promise<void> {
+  const { config, queue, submissions, bus } = services;
+  let updated = 0;
+  for (const job of queue.list()) {
+    if (job.status !== "queued" || !job.layout || !job.sourceKind) continue;
+    if (job.layout.mirrorX === config.paperMirrorX) continue; // already current
+    try {
+      await submissions.setLayout(job.id, {}); // empty patch → re-apply stored request
+      updated++;
+    } catch (error) {
+      bus.log(`Re-layout skipped job ${job.id}: ${(error as Error).message}`);
+    }
+  }
+  if (updated) bus.log(`Re-placed ${updated} queued job(s) for the current paper mounting.`);
+}
+
 function streamFileOr404(response: ServerResponse, filePath: string, contentType: string): void {
   fs.readFile(filePath, (error, data) => {
     if (error) {
@@ -304,6 +365,7 @@ function main(): void {
         console.log(`  ${message}`);
         bus.log(message);
       })
+      .then(() => relayoutStaleQueuedJobs(services))
       .catch((error) => {
         const message = `Gallery recompute failed: ${(error as Error).message}`;
         console.error(`  ! ${message}`);
