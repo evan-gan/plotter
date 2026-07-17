@@ -98,6 +98,31 @@ SVG is just an ordinary submission). Pieces:
   image-upload fallback (cameras aren't available on desktop / denied
   permission / insecure origin). Emits a decoded `HTMLImageElement` via
   `onCapture`.
+- `ImageCropper.svelte` — **square crop / zoom / rotate editor** (passport-photo
+  style) shown *between* capture and sketch generation. Drag to pan, scroll /
+  pinch / slider to zoom, slider + 90° buttons to rotate; a rule-of-thirds
+  overlay helps framing. All framing is resolution-independent (offsets are
+  fractions of the output side, base scale re-derives per canvas size), so the
+  live preview canvas and the high-res export canvas use identical `renderTo`
+  math. Confirming renders to a 1000 px square canvas and emits the framed
+  `HTMLImageElement` via `onCropped`, which becomes the sketch input. On open it
+  calls `detectFaceCrop` (`src/lib/faceCrop.ts`) to **auto-frame the face**; a
+  status line + **Center on face** button expose it. PhotoPage gates on
+  `editing = rawImage && !capturedImage`; **Adjust crop** re-opens the editor,
+  **Retake** clears both back to the camera.
+- `src/lib/faceCrop.ts` — **optional face-detection auto-framing.** Lazily loads
+  TensorFlow.js + MediaPipe FaceMesh from a **CDN** the first time a crop opens
+  (not bundled — keeps the build small and only pays the cost when used), caches
+  the detector, and tries WebGL then falls back to the CPU backend. Converts the
+  detected face box into `ImageCropper` framing (`zoom` + pan `offset*Fraction` +
+  `rotationDeg`) by estimating full-head height (÷0.75), sizing the crop so the
+  head fills ~62% with headroom above, then inverting `renderTo`'s cover-scale
+  geometry. It also **auto-levels**: the roll angle from the eye-corner landmarks
+  (FaceMesh indices 33/133 & 263/362) rotates the image so the eyes sit
+  horizontal (clamped to ±40° to ignore misdetections / profile shots), and the
+  pan offset is rotated by that same angle so the face stays centered. **Fails
+  soft**: if the CDN is unreachable (offline plotter) or no single face is found,
+  it throws and the operator just crops manually — the feature is never required.
 - `src/lib/imageLineart.ts` — browser glue: draws the image into a square canvas
   to read luminance, then calls `computeDarkness` + `imageToLineart` +
   `drawingToSvg` from plotter-utils. **The UI is stipple/TSP-only** (scribble +

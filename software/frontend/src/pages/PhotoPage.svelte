@@ -7,6 +7,7 @@
   import { navigate } from "../lib/router";
   import EstimateResult from "../components/EstimateResult.svelte";
   import CameraCapture from "../components/CameraCapture.svelte";
+  import ImageCropper from "../components/ImageCropper.svelte";
   import {
     imageToSketchSvg,
     DEFAULT_SKETCH,
@@ -14,6 +15,9 @@
     type SketchSettings,
   } from "../lib/imageLineart";
 
+  // The raw photo straight from the camera/upload, shown in the crop editor.
+  let rawImage: HTMLImageElement | null = null;
+  // The cropped/zoomed/rotated square image that actually feeds the sketch.
   let capturedImage: HTMLImageElement | null = null;
   let settings: SketchSettings = { ...DEFAULT_SKETCH };
   let sketchSvg = "";
@@ -26,10 +30,26 @@
   let submitted = false;
   let errorMessage = "";
 
+  // Show the crop editor after capture and again when the user re-crops.
+  $: editing = rawImage !== null && capturedImage === null;
+
   function onCapture(image: HTMLImageElement): void {
-    capturedImage = image;
+    // Send the fresh photo into the crop editor rather than sketching it raw.
+    rawImage = image;
+    capturedImage = null;
+    submitted = false;
+  }
+
+  function onCropped(cropped: HTMLImageElement): void {
+    capturedImage = cropped;
     submitted = false;
     generateSketch();
+  }
+
+  function editCrop(): void {
+    // Re-open the editor on the original photo, keeping its previous framing
+    // context out of the way (a fresh crop starts from the editor defaults).
+    capturedImage = null;
   }
 
   async function generateSketch(): Promise<void> {
@@ -94,9 +114,22 @@
 
 <div class="layout">
   <section class="card">
-    <CameraCapture {onCapture} />
+    {#if !rawImage}
+      <CameraCapture {onCapture} />
+    {/if}
+
+    {#if editing && rawImage}
+      <ImageCropper image={rawImage} {onCropped} />
+      <div class="actions" style="margin-top: var(--space-3)">
+        <button on:click={() => (rawImage = null)}>← Retake / choose another</button>
+      </div>
+    {/if}
 
     {#if capturedImage}
+      <div class="actions" style="margin-bottom: var(--space-3)">
+        <button on:click={editCrop}>✂️ Adjust crop</button>
+        <button on:click={() => { rawImage = null; capturedImage = null; }}>Retake</button>
+      </div>
       <div class="settings">
         <div class="field">
           <span>Detail — fewer dots plot faster</span>
