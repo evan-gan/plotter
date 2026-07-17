@@ -13,6 +13,7 @@ import { EtaService } from "./eta";
 import { QueueService } from "./queue";
 import { GalleryService } from "./gallery";
 import { SubmissionService } from "./submissions";
+import { WorkerPipeline } from "./pipeline-pool";
 import { PlotRefeedService } from "./refeed";
 import { PlotRunner } from "./runner";
 import { MachineService } from "./machine";
@@ -38,15 +39,19 @@ function buildServices() {
   const bus = new EventBus();
   const serial = new SerialManager({ simulate: config.simulate, preferredPort: config.serialPort, bus });
   const lock = new MachineLock();
-  const eta = new EtaService(serial);
+  // Run the CPU-heavy pipeline (optimizer + G-code generation + ETA) on a
+  // worker thread so it never blocks the event loop the plot runner and the
+  // realtime controls (pause/abort/jog) depend on.
+  const pipeline = new WorkerPipeline();
+  const eta = new EtaService(serial, pipeline);
   const queue = new QueueService(config.dataDir, () => bus.broadcast({ type: "queueChanged" }));
-  const gallery = new GalleryService(config, eta);
-  const submissions = new SubmissionService(config, eta, queue);
+  const gallery = new GalleryService(config, eta, pipeline);
+  const submissions = new SubmissionService(config, eta, queue, pipeline);
   const refeed = new PlotRefeedService(eta, queue, gallery, bus);
   const runner = new PlotRunner(serial, bus, queue, lock);
   const machine = new MachineService(serial, bus, lock, eta, refeed);
   const tuner = new TunerService(serial, bus, lock, refeed);
-  return { config, bus, serial, lock, eta, queue, gallery, submissions, refeed, runner, machine, tuner };
+  return { config, bus, serial, lock, pipeline, eta, queue, gallery, submissions, refeed, runner, machine, tuner };
 }
 
 type Services = ReturnType<typeof buildServices>;
@@ -374,6 +379,7 @@ function main(): void {
   });
 
   const shutdown = async () => {
+    services.pipeline.destroy();
     await serial.close();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 1500).unref();

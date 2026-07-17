@@ -5,10 +5,11 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-import { prepareSvgPlot, prepareGcodePlot, PreparedPlot } from "plotter-utils";
+import { PreparePlotOptions } from "plotter-utils";
 import { JsonStore } from "./db";
 import { EtaService } from "./eta";
 import { BackendConfig, paperLayoutOptions } from "./config";
+import { PipelineRunner, InlinePipeline, PrepareResult } from "./pipeline-pool";
 
 export interface GalleryEntry {
   id: string;
@@ -28,13 +29,15 @@ interface GalleryCache {
 export class GalleryService {
   private config: BackendConfig;
   private eta: EtaService;
+  private pipeline: PipelineRunner;
   private cacheStore: JsonStore<GalleryCache>;
   private cache: GalleryCache;
   private previewDir: string;
 
-  constructor(config: BackendConfig, eta: EtaService) {
+  constructor(config: BackendConfig, eta: EtaService, pipeline: PipelineRunner = new InlinePipeline()) {
     this.config = config;
     this.eta = eta;
+    this.pipeline = pipeline;
     this.cacheStore = new JsonStore<GalleryCache>(path.join(config.dataDir, "gallery-cache.json"), { entries: {} });
     this.cache = this.cacheStore.load();
     this.previewDir = path.join(config.dataDir, "gallery-previews");
@@ -105,8 +108,7 @@ export class GalleryService {
     try {
       const prepared = await this.prepare(fullPath, kind);
       fs.writeFileSync(this.previewPath(id), prepared.previewSvg);
-      const breakdown = await this.eta.estimate(prepared.gcode);
-      entry.etaSeconds = breakdown.seconds;
+      entry.etaSeconds = prepared.eta.seconds;
       entry.penUpSavedMm = prepared.stats ? prepared.stats.penUpBeforeMm - prepared.stats.penUpAfterMm : null;
     } catch (error) {
       entry.error = (error as Error).message;
@@ -115,23 +117,28 @@ export class GalleryService {
     return entry;
   }
 
-  private async prepare(fullPath: string, kind: "svg" | "gcode"): Promise<PreparedPlot> {
+  private async prepare(fullPath: string, kind: "svg" | "gcode"): Promise<PrepareResult> {
     const source = fs.readFileSync(fullPath, "utf8");
+    // Read live settings once (serial I/O); the optimize + ETA then run on the
+    // pipeline (a worker thread in production) so a full gallery reprocess never
+    // blocks the main event loop.
+    const settings = await this.eta.liveSettings();
     if (kind === "svg") {
       // Draw at the board's tuned max feed ($110), matching the submit path;
       // fall back to the configured default when no board is reachable.
       const feedMmMin = (await this.eta.liveMaxFeedMmMin()) ?? this.config.drawFeedMmMin;
       // Place on paper (orientation/scale/mirror/bottom-right anchor) so the
       // gallery ETA reflects the plot that would actually run when enqueued.
-      return prepareSvgPlot(source, {
+      const options: PreparePlotOptions = {
         svg: { fitWidthMm: this.config.workWidthMm, fitHeightMm: this.config.workHeightMm },
         gcode: { feedMmMin },
         paper: paperLayoutOptions(this.config),
-      });
+      };
+      return this.pipeline.prepare({ kind: "svg", source, options, settings });
     }
     // Pre-made G-code is trusted as-is (no re-optimization: the author's
     // feeds/order stay intact); we only derive the preview.
-    return prepareGcodePlot(source, { optimize: false });
+    return this.pipeline.prepare({ kind: "gcode", source, options: { optimize: false }, settings });
   }
 
   get(id: string): GalleryEntry | undefined {

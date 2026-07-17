@@ -2,21 +2,23 @@
 // Reads live `$$` settings when a board is reachable so estimates track the
 // current tuning; falls back to firmware compile-time defaults offline.
 
-import { etaEngine, gcodeParser, calibrationStore, EtaBreakdown } from "./firmware-bridge";
 import { SerialManager } from "./serial-manager";
+import { PipelineRunner, InlinePipeline, EtaResult } from "./pipeline-pool";
 
 export class EtaService {
   private serial: SerialManager;
+  private pipeline: PipelineRunner;
   private cachedSettings: Record<string, number> | null = null;
   private cachedAt = 0;
   private static readonly SETTINGS_TTL_MS = 60_000;
 
-  constructor(serial: SerialManager) {
+  constructor(serial: SerialManager, pipeline: PipelineRunner = new InlinePipeline()) {
     this.serial = serial;
+    this.pipeline = pipeline;
   }
 
   /** Live `$$` if a board is connected (cached briefly), else null. */
-  private async liveSettings(): Promise<Record<string, number> | null> {
+  async liveSettings(): Promise<Record<string, number> | null> {
     if (this.cachedSettings && Date.now() - this.cachedAt < EtaService.SETTINGS_TTL_MS) {
       return this.cachedSettings;
     }
@@ -46,13 +48,15 @@ export class EtaService {
     return typeof feed === "number" && feed > 0 ? feed : null;
   }
 
-  /** Estimate run time for a G-code program (seconds + full breakdown). */
-  async estimate(gcodeText: string): Promise<EtaBreakdown & { calibrated: boolean; liveSettings: boolean }> {
+  /**
+   * Estimate run time for a G-code program (seconds + full breakdown). Reads
+   * live board settings here (serial I/O) and hands the CPU-heavy physics pass
+   * to the pipeline, which offloads it from the main event loop in production.
+   */
+  async estimate(gcodeText: string): Promise<EtaResult> {
     const settings = await this.liveSettings();
-    const calibration = calibrationStore.loadCalibration();
-    const config = etaEngine.configFromSettings(settings, calibration ?? {});
-    const primitives = gcodeParser.parseGcode(gcodeText, config.arcToleranceMm);
-    const breakdown = etaEngine.estimateEta(primitives, config);
-    return { ...breakdown, calibrated: calibration !== null, liveSettings: settings !== null };
+    return this.pipeline.estimate({ gcode: gcodeText, settings });
   }
 }
+
+export type { EtaResult };

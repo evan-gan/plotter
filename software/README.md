@@ -4,9 +4,9 @@ The plotter's software stack — a pnpm workspace with three packages:
 
 | Package | What it is |
 | ------- | ---------- |
-| [`utils/`](utils) | Pure-TS library: SVG ⇄ G-code converters and the pen-up path optimizer (endpoint merge → chaining → greedy tour → 2-opt/Or-opt). No runtime deps. |
+| [`utils/`](utils) | Pure-TS library: SVG ⇄ G-code converters, the pen-up path optimizer (endpoint merge → chaining → greedy tour → 2-opt/Or-opt), and the photo → single-pen line-art converter (`imageToLineart`, three algorithms). No runtime deps. |
 | [`backend/`](backend) | The Raspberry Pi server (node:http, no framework). Drawing queue + JSON DB, G-code runner with pause/abort, machine controls, tuning + ETA-calibration bridge, SSE events, static hosting of the frontend. Serial is **optional** — it runs disconnected, and ships a built-in firmware simulator. |
-| [`frontend/`](frontend) | Static Svelte 5 + Vite SPA: GitHub-upload instructions, send-a-drawing (optimize + time estimate), live queue, gallery with ETAs, and the password-gated admin panel (start/pause/abort, reorder, jog/home/steppers, componentized tuner + calibration + settings). |
+| [`frontend/`](frontend) | Static Svelte 5 + Vite SPA: GitHub-upload instructions, send-a-drawing (optimize + time estimate), **photo → sketch** (take/upload a photo, convert to line art in-browser, then estimate + queue), live queue, gallery with ETAs, and the password-gated admin panel (start/pause/abort, reorder, jog/home/steppers, componentized tuner + calibration + settings). |
 
 ## Quick start (no hardware needed)
 

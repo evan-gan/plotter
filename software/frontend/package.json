@@ -4,6 +4,9 @@
   "private": true,
   "description": "Static Svelte frontend for the plotter: submit drawings, queue, gallery, and the admin/tuning panel. Served by the Pi backend (or any static host).",
   "type": "module",
+  "dependencies": {
+    "plotter-utils": "workspace:*"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",

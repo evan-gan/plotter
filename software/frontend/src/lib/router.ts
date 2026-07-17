@@ -2,9 +2,9 @@
 
 import { readable } from "svelte/store";
 
-export type RouteName = "home" | "submit" | "queue" | "gallery" | "admin";
+export type RouteName = "home" | "submit" | "photo" | "queue" | "gallery" | "admin";
 
-const ROUTES: RouteName[] = ["home", "submit", "queue", "gallery", "admin"];
+const ROUTES: RouteName[] = ["home", "submit", "photo", "queue", "gallery", "admin"];
 
 function currentRoute(): RouteName {
   const hash = window.location.hash.replace(/^#\/?/, "").split("?")[0];

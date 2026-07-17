@@ -25,6 +25,10 @@ importers:
         version: 5.9.3
 
   frontend:
+    dependencies:
+      plotter-utils:
+        specifier: workspace:*
+        version: link:../utils
     devDependencies:
       '@sveltejs/vite-plugin-svelte':
         specifier: ^5.0.0

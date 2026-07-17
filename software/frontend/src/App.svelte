@@ -3,6 +3,7 @@
   import Nav from "./components/Nav.svelte";
   import HomePage from "./pages/HomePage.svelte";
   import SubmitPage from "./pages/SubmitPage.svelte";
+  import PhotoPage from "./pages/PhotoPage.svelte";
   import QueuePage from "./pages/QueuePage.svelte";
   import GalleryPage from "./pages/GalleryPage.svelte";
   import AdminPage from "./pages/AdminPage.svelte";
@@ -15,6 +16,8 @@
     <HomePage />
   {:else if $route === "submit"}
     <SubmitPage />
+  {:else if $route === "photo"}
+    <PhotoPage />
   {:else if $route === "queue"}
     <QueuePage />
   {:else if $route === "gallery"}

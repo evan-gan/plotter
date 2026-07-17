@@ -3,11 +3,11 @@
 // + ETA out. Placement (orientation/scale/mirror/bottom-right anchor) is applied
 // so plots are easy to align by hand; the admin can rescale a queued job later.
 
-import { prepareSvgPlot, prepareGcodePlot, PreparedPlot, PaperLayoutResult } from "plotter-utils";
+import { PreparePlotOptions } from "plotter-utils";
 import { BackendConfig, paperLayoutOptions, LayoutRequest } from "./config";
 import { EtaService } from "./eta";
 import { QueueService, Job, LayoutInfo, LayoutRequestInfo } from "./queue";
-import { EtaBreakdown } from "./firmware-bridge";
+import { PipelineRunner, InlinePipeline, PrepareResult, EtaResult } from "./pipeline-pool";
 
 export interface SubmissionInput {
   name?: string;
@@ -32,35 +32,13 @@ function toLayoutRequestInfo(request?: LayoutRequest | null): LayoutRequestInfo 
 export interface SubmissionPreview {
   previewSvg: string;
   gcodeLineCount: number;
-  eta: EtaBreakdown & { calibrated: boolean; liveSettings: boolean };
+  eta: EtaResult;
   stats: Record<string, number> | null;
   layout: LayoutInfo | null;
 }
 
-/** Strip the geometry off a layout result, leaving the metadata the UI needs. */
-export function toLayoutInfo(layout: PaperLayoutResult | null): LayoutInfo | null {
-  if (!layout) return null;
-  return {
-    orientation: layout.orientation,
-    paperWidthMm: layout.paperWidthMm,
-    paperHeightMm: layout.paperHeightMm,
-    paddingMm: layout.paddingMm,
-    drawableWidthMm: layout.drawableWidthMm,
-    drawableHeightMm: layout.drawableHeightMm,
-    contentWidthMm: layout.contentWidthMm,
-    contentHeightMm: layout.contentHeightMm,
-    positionXMm: layout.positionXMm,
-    positionYMm: layout.positionYMm,
-    appliedScale: layout.appliedScale,
-    maxFitScale: layout.maxFitScale,
-    fillFraction: layout.fillFraction,
-    mirrorX: layout.mirrorX,
-    overflows: layout.overflows,
-  };
-}
-
 interface PreparedSubmission {
-  prepared: PreparedPlot;
+  result: PrepareResult;
   sourceKind: Job["sourceKind"];
   sourceText: string | null;
   optimize: boolean;
@@ -70,11 +48,18 @@ export class SubmissionService {
   private config: BackendConfig;
   private eta: EtaService;
   private queue: QueueService;
+  private pipeline: PipelineRunner;
 
-  constructor(config: BackendConfig, eta: EtaService, queue: QueueService) {
+  constructor(
+    config: BackendConfig,
+    eta: EtaService,
+    queue: QueueService,
+    pipeline: PipelineRunner = new InlinePipeline()
+  ) {
     this.config = config;
     this.eta = eta;
     this.queue = queue;
+    this.pipeline = pipeline;
   }
 
   /**
@@ -88,70 +73,72 @@ export class SubmissionService {
 
   private async prepare(input: SubmissionInput): Promise<PreparedSubmission> {
     const optimize = input.optimize !== false;
+    // Read live board settings once (serial I/O); the heavy optimize + estimate
+    // then run on the pipeline (a worker thread in production).
+    const settings = await this.eta.liveSettings();
     const feedMmMin = await this.drawFeedMmMin();
     const paper = paperLayoutOptions(this.config, input.layout);
     if (typeof input.svgText === "string" && input.svgText.trim()) {
-      const prepared = prepareSvgPlot(input.svgText, {
+      const options: PreparePlotOptions = {
         optimize,
         // Parse at the work-area size; layout then fits it to the paper.
         svg: { fitWidthMm: this.config.workWidthMm, fitHeightMm: this.config.workHeightMm },
         gcode: { feedMmMin },
         paper,
-      });
-      return { prepared, sourceKind: "svg", sourceText: input.svgText, optimize };
+      };
+      const result = await this.pipeline.prepare({ kind: "svg", source: input.svgText, options, settings });
+      return { result, sourceKind: "svg", sourceText: input.svgText, optimize };
     }
     if (typeof input.gcodeText === "string" && input.gcodeText.trim()) {
       // optimize=false streams the file byte-for-byte (author's feeds + layout
       // preserved, no paper placement); optimize=true re-generates + places it.
-      const prepared = prepareGcodePlot(input.gcodeText, {
+      const options: PreparePlotOptions = {
         optimize,
         gcode: { feedMmMin },
         ...(optimize ? { paper } : {}),
-      });
+      };
+      const result = await this.pipeline.prepare({ kind: "gcode", source: input.gcodeText, options, settings });
       // Only keep the source when it can be regenerated (placed) at a new scale.
-      return { prepared, sourceKind: "gcode", sourceText: optimize ? input.gcodeText : null, optimize };
+      return { result, sourceKind: "gcode", sourceText: optimize ? input.gcodeText : null, optimize };
     }
     throw new Error("Provide svgText or gcodeText.");
   }
 
-  private toPreview(prepared: PreparedPlot, eta: SubmissionPreview["eta"]): SubmissionPreview {
+  private toPreview(result: PrepareResult): SubmissionPreview {
     return {
-      previewSvg: prepared.previewSvg,
-      gcodeLineCount: prepared.gcode.split("\n").length,
-      eta,
-      stats: (prepared.stats as Record<string, number> | null) ?? null,
-      layout: toLayoutInfo(prepared.layout),
+      previewSvg: result.previewSvg,
+      gcodeLineCount: result.gcode.split("\n").length,
+      eta: result.eta,
+      stats: result.stats,
+      layout: result.layout,
     };
   }
 
   /** Estimate without touching the queue (drives the submit-page preview). */
   async estimate(input: SubmissionInput): Promise<SubmissionPreview> {
-    const { prepared } = await this.prepare(input);
-    const eta = await this.eta.estimate(prepared.gcode);
-    return this.toPreview(prepared, eta);
+    const { result } = await this.prepare(input);
+    return this.toPreview(result);
   }
 
   /** Full submission: prepare, estimate, persist as a queued job. */
   async submit(
     input: SubmissionInput, source?: Job["source"]
   ): Promise<{ job: Job; preview: SubmissionPreview }> {
-    const { prepared, sourceKind, sourceText, optimize } = await this.prepare(input);
-    const eta = await this.eta.estimate(prepared.gcode);
-    const layout = toLayoutInfo(prepared.layout);
+    const { result, sourceKind, sourceText, optimize } = await this.prepare(input);
     const job = this.queue.add({
       name: input.name ?? "untitled",
       source: source ?? (input.svgText ? "svg-upload" : "gcode-upload"),
-      gcode: prepared.gcode,
-      previewSvg: prepared.previewSvg,
-      etaSeconds: eta.seconds,
-      stats: (prepared.stats as Record<string, number> | null) ?? null,
-      layout,
+      gcode: result.gcode,
+      previewSvg: result.previewSvg,
+      etaSeconds: result.eta.seconds,
+      stats: result.stats,
+      layout: result.layout,
       layoutRequest: toLayoutRequestInfo(input.layout),
       sourceText,
       sourceKind,
       optimize,
     });
-    return { job, preview: this.toPreview(prepared, eta) };
+    return { job, preview: this.toPreview(result) };
   }
 
   /**
@@ -180,15 +167,14 @@ export class SubmissionService {
       job.sourceKind === "svg"
         ? { name: job.name, svgText: sourceText, optimize: job.optimize, layout: merged }
         : { name: job.name, gcodeText: sourceText, optimize: job.optimize, layout: merged };
-    const { prepared } = await this.prepare(input);
-    const eta = await this.eta.estimate(prepared.gcode);
-    this.queue.writeGenerated(jobId, prepared.gcode, prepared.previewSvg);
+    const { result } = await this.prepare(input);
+    this.queue.writeGenerated(jobId, result.gcode, result.previewSvg);
     return this.queue.update(jobId, {
-      etaSeconds: eta.seconds,
-      stats: (prepared.stats as Record<string, number> | null) ?? null,
-      layout: toLayoutInfo(prepared.layout),
+      etaSeconds: result.eta.seconds,
+      stats: result.stats,
+      layout: result.layout,
       layoutRequest: merged,
-      lineCount: prepared.gcode.split("\n").filter((line) => line.trim() && !line.trim().startsWith(";")).length,
+      lineCount: result.gcode.split("\n").filter((line) => line.trim() && !line.trim().startsWith(";")).length,
     });
   }
 }

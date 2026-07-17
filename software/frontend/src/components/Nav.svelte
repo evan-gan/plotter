@@ -5,6 +5,7 @@
   const links = [
     { target: "home", label: "Home" },
     { target: "submit", label: "Send a drawing" },
+    { target: "photo", label: "Photo → sketch" },
     { target: "queue", label: "Queue" },
     { target: "gallery", label: "Gallery" },
     { target: "admin", label: "Admin" },

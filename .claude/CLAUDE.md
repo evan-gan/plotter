@@ -47,7 +47,8 @@ uses a real board. `pnpm test` runs the utils + backend suites. Full details in
 | `src/optimizer.ts` | **The path optimizer** (TODO.md algorithm): (optional crossing-split via `intersections.ts`) → endpoint merge → greedy chaining → greedy tour → alternating 2-opt/Or-opt → orientation DP. Minimizes pen-up distance. `OptimizeOptions.splitAtIntersections` (default **on**) enables the crossing-split pre-stage; the optimizer plans the tour both with and without splitting and keeps whichever scores lower (pen-up + per-lift penalty), so splitting can never regress a plot. `stats.splitAtIntersectionsApplied` reports whether the split plan won. |
 | `src/layout.ts` | **Paper placement** (`layoutOnPaper`): takes an optimized `Drawing` and places it on a physical sheet for hand-aligned plotting — auto-picks portrait/landscape (whichever fits largest), scales to fit (shrink-to-fit by default, never enlarges past 1:1 unless `fillFraction` asks), mirrors X so it reads correctly when the head starts at the paper's **bottom-right corner**, and anchors the content to that corner. Returns the placed drawing + metadata (`orientation`, `paperWidth/HeightMm`, `contentWidth/HeightMm`, `appliedScale`, `maxFitScale`, `fillFraction`) used by the admin overlay + scale control. |
 | `src/pipeline.ts` | One-call `prepareSvgPlot` / `prepareGcodePlot` → `{gcode, previewSvg, stats, layout}`. When `paper` options are passed it applies `layoutOnPaper` **after** optimize and **before** gcode generation (the preview SVG still renders the artwork in its natural, un-mirrored orientation). Authored G-code (`optimize:false`) is never placed. |
-| `src/index.ts` | Public barrel. `tests/` = plain-JS harness over `dist/` (`pnpm test`, 63 checks). |
+| `src/image-to-lineart.ts` | **Photo → single-pen line art** (TS port of upgraded-blot's three vpype generators). `computeDarkness(luminance, size, opts)` shapes a square grayscale grid (contrast → levels → gamma) into a darkness map; `imageToLineart(darkness, size, opts)` turns it into a mm-space `Drawing` via one of three seeded algorithms: **`stipple`** (weighted rejection-sampling → Lloyd's relaxation → nearest-neighbour TSP → Catmull-Rom, reusing `kd-tree.ts`), **`scribble`** (greedy error-guided strokes vs. a `drawn` buffer → midpoint-quadratic smoothing), **`pintr`** (darkest-of-K long strokes consuming a `remaining` map). Pure TS (no image decode — the browser supplies luminance via a canvas). Consumed by the frontend Photo page, then run through the normal optimize/estimate/submit flow. |
+| `src/index.ts` | Public barrel. `tests/` = plain-JS harness over `dist/` (`pnpm test`, 75 checks). |
 
 ### `software/backend/` — the Raspberry Pi server (node:http, no framework)
 Serial is **optional**: it runs disconnected and swaps in a firmware simulator
@@ -65,7 +66,8 @@ when `PLOTTER_SIMULATE=1`. Reuses `firmware/tools/lib` for ETA/tuning/calibratio
 | `src/runner.ts` | `PlotRunner`: streams a job with ok/error flow control; realtime pause/resume/abort (soft-reset). |
 | `src/machine.ts` | Jog, set-home, steppers, pen, settings read/write, `$RST=*`, diagnostic shapes. `setHome()` sends `G92 X0 Y0` then calls `connection.captureWorkOrigin()` so the reported position (and UI marker) snaps to the origin on zero. |
 | `src/tuner.ts` | Bridges `firmware/tools/lib` tune-engine + calibrate harness onto SSE (`tune:*`/`cal:*` events). |
-| `src/eta.ts` | ETA wrapper: firmware ETA engine + live `$$` + host calibration knobs. |
+| `src/eta.ts` | ETA wrapper: reads live `$$` (serial I/O) then hands the CPU-heavy physics pass to the **pipeline** (worker thread in prod). `liveSettings()` is public so submissions/gallery read board settings once and pass them into a single pipeline call. |
+| `src/pipeline-compute.ts`, `src/pipeline-worker.ts`, `src/pipeline-pool.ts`, `src/layout-info.ts` | **Off-the-event-loop pipeline.** `pipeline-compute.ts` = the synchronous, serial-free work (`runPrepare` = optimizer + G-code gen + preview + ETA; `runEstimate` = ETA only). `pipeline-worker.ts` = worker-thread entry that runs those. `pipeline-pool.ts` exports the `PipelineRunner` interface + two impls: `InlinePipeline` (runs on the caller's thread — tests/fallback, the default arg) and `WorkerPipeline` (single worker + FIFO queue, respawns on crash, `unref`'d; injected by `buildServices` in prod). `layout-info.ts` = shared `toLayoutInfo` (PaperLayoutResult → scalar `LayoutInfo`, no geometry crosses the thread boundary). **Why:** a large-drawing optimize used to block Node's single event loop for seconds, stalling the runner's serial `ok` flow control (plot halts) and the pause/abort/jog handlers (controls dead). Offloading keeps the loop responsive. |
 | `src/gallery.ts` | `drawings/` folder → previews + ETAs, cached by mtime. `refreshAll()` force-clears the cache and reprocesses every drawing — called once at server startup (from `server.ts` `main()`) so gallery G-code always reflects the current optimizer/generator code after a deploy, not a stale cached result. **Enqueuing a gallery pick is treated exactly like a fresh upload:** the `/api/gallery/:id/enqueue` route calls `readSource(id)` to read the *original* `drawings/` file and re-prepares it through `SubmissionService` at enqueue time (SVG re-optimized, authored G-code streamed as-is), so the queued job's G-code + ETA use the board's *current* tuned feed and the latest optimizer — never a cached result. Only the preview SVG is cached to disk (the ETA in the list view is computed in-memory), so cached G-code is no longer written. SVG entries are **paper-placed** (via `paperLayoutOptions(config)`) so the gallery ETA reflects the plot that would actually run. |
 | `src/submissions.ts` | SVG/G-code in → optimized + **paper-placed** gcode + preview + ETA (drives `/api/estimate` + `/api/submit`). Passes `paperLayoutOptions(config, layoutRequest)` into the pipeline, saves the source + `layout` + the admin's `layoutRequest` on the job, and exposes `setLayout(jobId, patch)` — merge a placement patch (scale / orientation / position) onto the job's stored request and regenerate its gcode/preview/ETA/layout (drives `POST /api/admin/queue/:id/layout`). Generated draw (G1) strokes use the board's tuned max feed (`$110`, via `EtaService.liveMaxFeedMmMin()`), falling back to `DRAW_FEED_MM_MIN` (default 1500) when offline — so plots draw at the tuned speed, not the generator default. Same for gallery SVGs in `gallery.ts`. |
 | `src/refeed.ts` | `PlotRefeedService`: after the board is retuned / ETA-calibrated / a motion setting ($110-$122) is changed, rewrites the draw feed of already-queued jobs (and drops the gallery cache) to the board's *current* tuned `$110` and refreshes their ETAs. Only touches gcode we generated (identified by `GENERATED_MARKER` via `utils`' `retargetDrawFeed`); authored gcode is left byte-for-byte. Wired into `tuner.ts` (tune-complete + save-calibration), `machine.ts` (setSetting/resetDefaults), and `POST /api/admin/refeed`. No-op when no board is reachable (won't guess a feed). **Why this exists:** the firmware caps each move at `min($110, $112/motor-load)`, so a plot generated with a low `F` word draws slowly *even on a tuned board* — the ETA is accurate but the speed is left on the table. Refeeding lifts existing jobs to the tuned rate. |
@@ -75,10 +77,41 @@ when `PLOTTER_SIMULATE=1`. Reuses `firmware/tools/lib` for ETA/tuning/calibratio
 ### `software/frontend/` — static Svelte 5 + Vite SPA
 Hash-routed, talks to the backend over `/api` (proxied in dev, same-origin in
 prod). `src/pages/` = Home (GitHub-upload instructions), Submit (optimize +
-estimate), Queue, Gallery (ETAs), Admin (password-gated). `src/components/` =
-reusable pieces incl. the **componentized** `MachineControls`/`JogPad`,
-`TunerPanel`, `CalibrationPanel`, `SettingsTable`, `PlotControls`,
-`QueueManager`, `ConsoleLog`.
+estimate), **Photo → sketch** (`PhotoPage.svelte`), Queue, Gallery (ETAs), Admin
+(password-gated). `src/components/` = reusable pieces incl. the **componentized**
+`MachineControls`/`JogPad`, `TunerPanel`, `CalibrationPanel`, `SettingsTable`,
+`PlotControls`, `QueueManager`, `ConsoleLog`, `CameraCapture`, `EstimateResult`.
+
+**The frontend depends on `plotter-utils`** (`workspace:*`) so it can run the
+photo → line-art converter in the browser. utils compiles to CommonJS and is
+symlinked (not a plain node_modules dep), so `vite.config.ts` pre-bundles it
+(`optimizeDeps.include`) and runs the CJS→ESM transform on `utils/dist`
+(`build.commonjsOptions.include`) — without that Vite treats it as ESM source
+and misses its named exports.
+
+**Photo → sketch page** (`PhotoPage.svelte`): take a photo with the device
+camera (or upload an image), convert it to single-pen line art **entirely in the
+browser**, then estimate + queue it through the *same* `/api/estimate` +
+`/api/submit` flow as the Submit page (no new backend endpoints — the generated
+SVG is just an ordinary submission). Pieces:
+- `CameraCapture.svelte` — `getUserMedia` live camera + capture button, with an
+  image-upload fallback (cameras aren't available on desktop / denied
+  permission / insecure origin). Emits a decoded `HTMLImageElement` via
+  `onCapture`.
+- `src/lib/imageLineart.ts` — browser glue: draws the image into a square canvas
+  to read luminance, then calls `computeDarkness` + `imageToLineart` +
+  `drawingToSvg` from plotter-utils. **The UI is stipple/TSP-only** (scribble +
+  pintr still exist in utils but aren't exposed — stipple gives the cleanest
+  single-pen result); `algorithm` stays fixed to `"stipple"`. Detail is a
+  4-preset control (`DETAIL_PRESETS`: Quick 0.35 / Fast 0.8 / Balanced 1.6 /
+  Detailed 3.0 point density), **defaulting to Quick** so photos plot fast by
+  default; `contrast`/`gamma`/`seed` are still exposed.
+- `EstimateResult.svelte` — the shared preview + ETA readout, extracted from
+  SubmitPage so both pages render the estimate identically. Uses `SvgPreview`.
+- `SvgPreview.svelte` — renders a preview from either inline markup or a URL.
+  **Inline markup is drawn as a blob-URL `<img>`, not `{@html}`**: a big
+  drawing's preview has tens of thousands of `<path>`s, and injecting that as
+  live DOM froze the tab — the image pipeline rasterizes it off the live tree.
 
 **Admin is a CNC-style dashboard** (`AdminPage.svelte`): a plot-setup view on
 top, the queue below it, and everything else in a right-hand drawer — designed
